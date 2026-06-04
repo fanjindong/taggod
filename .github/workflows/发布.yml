@@ -1,0 +1,51 @@
+name: 发布
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 打包并发布
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 检查 tag 与插件版本一致
+        run: |
+          node -e "const fs = require('fs'); const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8')); const tagVersion = process.env.GITHUB_REF_NAME.replace(/^v/, ''); if (manifest.version !== tagVersion) { throw new Error('tag 版本必须与 manifest.json version 一致：' + process.env.GITHUB_REF_NAME + ' / ' + manifest.version); }"
+
+      - name: 执行插件校验
+        run: node scripts/校验插件.js
+
+      - name: 打包插件
+        run: |
+          zip -r "标签之神-${GITHUB_REF_NAME}.zip" \
+            manifest.json \
+            background.js \
+            popup.html \
+            popup.css \
+            popup.js \
+            README.md \
+            LICENSE \
+            assets
+
+      - name: 创建 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            "标签之神-${GITHUB_REF_NAME}.zip" \
+            --title "标签之神 ${GITHUB_REF_NAME}" \
+            --generate-notes

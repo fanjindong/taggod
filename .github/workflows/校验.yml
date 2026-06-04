@@ -1,0 +1,34 @@
+name: 校验
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: 插件校验
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 检查后台脚本语法
+        run: node --check background.js
+
+      - name: 检查弹窗脚本语法
+        run: node --check popup.js
+
+      - name: 执行插件校验
+        run: node scripts/校验插件.js

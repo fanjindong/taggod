@@ -13,18 +13,86 @@ const DEFAULT_SETTINGS = {
 
 const GROUP_COLORS = ['blue', 'green', 'yellow', 'red', 'purple', 'cyan', 'orange', 'pink', 'grey'];
 
+// 浏览器没有内置可注册主域名 API，这里保留常见多级公共后缀，避免把站点错误合并到公共后缀本身。
+const COMMON_MULTI_PART_PUBLIC_SUFFIXES = new Set([
+  'com.cn',
+  'net.cn',
+  'org.cn',
+  'gov.cn',
+  'edu.cn',
+  'co.uk',
+  'org.uk',
+  'ac.uk',
+  'com.au',
+  'net.au',
+  'org.au',
+  'co.jp',
+  'ne.jp',
+  'or.jp',
+  'co.kr',
+  'or.kr',
+  'com.br',
+  'com.mx',
+  'com.sg',
+  'com.hk',
+  'com.tw'
+]);
+
+function isIpAddressHost(hostname) {
+  // IP 地址没有可注册主域名，保持原值可以避免把不同内网服务错误合并。
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.includes(':');
+}
+
+function getPrimaryDomainFromHostname(hostname) {
+  const normalizedHostname = String(hostname || '').toLowerCase().replace(/\.$/, '');
+
+  if (!normalizedHostname) {
+    return '其他';
+  }
+
+  if (isIpAddressHost(normalizedHostname)) {
+    return normalizedHostname;
+  }
+
+  const parts = normalizedHostname.split('.').filter(Boolean);
+
+  if (parts.length <= 2) {
+    // 短主机名和二段域名本身已经是最稳定的分组键，不需要继续裁剪。
+    return normalizedHostname;
+  }
+
+  const publicSuffix = parts.slice(-2).join('.');
+
+  if (COMMON_MULTI_PART_PUBLIC_SUFFIXES.has(publicSuffix) && parts.length >= 3) {
+    // 多级公共后缀需要保留注册名，否则 example.com.cn 会被错误合并为 com.cn。
+    return parts.slice(-3).join('.');
+  }
+
+  return parts.slice(-2).join('.');
+}
+
 function getDomainKey(url) {
   try {
     const parsedUrl = new URL(url);
-    return parsedUrl.hostname || '其他';
+    return getPrimaryDomainFromHostname(parsedUrl.hostname);
   } catch (error) {
     // 无法解析的网址通常来自浏览器内部页面，归入“其他”能避免整理流程中断。
     return '其他';
   }
 }
 
+function getHostnameKey(url) {
+  try {
+    const parsedUrl = new URL(url);
+    return String(parsedUrl.hostname || '其他').toLowerCase().replace(/\.$/, '');
+  } catch (error) {
+    // 异常网址没有可靠子域名，使用“其他”可以让它们在主域名兜底组内稳定排序。
+    return '其他';
+  }
+}
+
 function getGroupColor(index) {
-  // Chrome 原生分组颜色数量有限，循环使用可以保证任意数量域名都有稳定颜色。
+  // Chrome 原生分组颜色数量有限，循环使用可以保证任意数量主域名都有稳定颜色。
   return GROUP_COLORS[index % GROUP_COLORS.length];
 }
 
@@ -157,7 +225,15 @@ async function organizeTabs() {
 
     const domainCompare = leftDomain.localeCompare(rightDomain, 'zh-CN');
 
-    return domainCompare === 0 ? left.index - right.index : domainCompare;
+    if (domainCompare !== 0) {
+      return domainCompare;
+    }
+
+    const leftHostname = getHostnameKey(left.url || '');
+    const rightHostname = getHostnameKey(right.url || '');
+    const hostnameCompare = leftHostname.localeCompare(rightHostname, 'zh-CN');
+
+    return hostnameCompare === 0 ? left.index - right.index : hostnameCompare;
   });
 
   for (let index = 0; index < sortedTabs.length; index += 1) {
@@ -184,7 +260,8 @@ async function organizeTabs() {
   let groupIndex = 0;
 
   for (const [groupKey, tabIds] of groups.entries()) {
-    if (tabIds.length === 0) {
+    if (tabIds.length < 2) {
+      // 单个标签创建原生分组会增加标签栏噪音，只对真正聚合了多个标签的主域名建组。
       continue;
     }
 
@@ -421,6 +498,11 @@ async function regroupRestoredTabs(tabs) {
   let groupIndex = 0;
 
   for (const [groupKey, tabIds] of groups.entries()) {
+    if (tabIds.length < 2) {
+      // 恢复会话时沿用同一规则，避免单标签主域名在恢复后变成多余分组。
+      continue;
+    }
+
     const groupId = await chrome.tabs.group({ tabIds }).catch(() => null);
 
     if (typeof groupId === 'number') {

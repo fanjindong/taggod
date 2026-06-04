@@ -31,7 +31,7 @@ jobs:
 
       - name: 打包插件
         run: |
-          zip -r "标签之神-${GITHUB_REF_NAME}.zip" \
+          zip -r "tabgod-${GITHUB_REF_NAME}.zip" \
             manifest.json \
             background.js \
             popup.html \
@@ -46,6 +46,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
-            "标签之神-${GITHUB_REF_NAME}.zip" \
+            "tabgod-${GITHUB_REF_NAME}.zip" \
             --title "标签之神 ${GITHUB_REF_NAME}" \
             --generate-notes

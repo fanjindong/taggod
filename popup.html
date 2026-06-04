@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>标签之神</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="popup-header">
+        <div>
+          <h1>标签之神</h1>
+          <p id="summaryText">正在读取标签页</p>
+        </div>
+      </header>
+
+      <section class="stats-grid" aria-label="标签概览">
+        <article class="stat-item">
+          <strong id="tabCount">0</strong>
+          <span>标签</span>
+        </article>
+        <article class="stat-item">
+          <strong id="domainCount">0</strong>
+          <span>域名</span>
+        </article>
+        <article class="stat-item">
+          <strong id="duplicateCount">0</strong>
+          <span>重复</span>
+        </article>
+        <article class="stat-item">
+          <strong id="groupCount">0</strong>
+          <span>分组</span>
+        </article>
+      </section>
+
+      <section class="action-grid" aria-label="常用操作">
+        <button id="organizeButton" class="primary-action" type="button">整理标签页</button>
+        <button id="closeDuplicatesButton" type="button">关闭重复</button>
+        <button id="saveSessionButton" type="button">保存会话</button>
+      </section>
+
+      <section class="list-section">
+        <div class="section-title">
+          <h2>优先分组</h2>
+        </div>
+        <div id="groupList" class="group-list"></div>
+      </section>
+
+      <label class="search-box">
+        <span>搜索标签</span>
+        <input id="searchInput" type="search" placeholder="输入标题、网址或域名">
+      </label>
+
+      <section class="list-section">
+        <div class="section-title">
+          <h2>当前标签</h2>
+          <span id="visibleCount">0 个结果</span>
+        </div>
+        <div id="tabList" class="tab-list"></div>
+      </section>
+
+      <section class="list-section">
+        <div class="section-title">
+          <h2>最近会话</h2>
+        </div>
+        <div id="sessionList" class="session-list"></div>
+      </section>
+
+      <p id="statusText" class="status-text" role="status"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

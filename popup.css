@@ -1,0 +1,283 @@
+:root {
+  color-scheme: light;
+  --text: #172033;
+  --muted: #697386;
+  --line: #d8dee9;
+  --surface: #ffffff;
+  --surface-soft: #f5f7fb;
+  --primary: #1f6feb;
+  --primary-strong: #1557b0;
+  --danger: #b42318;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 420px;
+  margin: 0;
+  color: var(--text);
+  background: var(--surface);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.popup-shell {
+  padding: 16px;
+}
+
+.popup-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.popup-header p,
+.section-title span,
+.status-text,
+.tab-url,
+.session-meta {
+  color: var(--muted);
+}
+
+.stats-grid,
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.action-grid {
+  grid-template-columns: 1.2fr 1fr 1fr;
+}
+
+.stat-item {
+  min-width: 0;
+  padding: 10px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.stat-item strong {
+  display: block;
+  font-size: 18px;
+}
+
+.stat-item span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--surface);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--surface-soft);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.primary-action {
+  border-color: var(--primary);
+  color: #ffffff;
+  background: var(--primary);
+}
+
+.primary-action:hover {
+  background: var(--primary-strong);
+}
+
+.search-box {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  font-size: 13px;
+}
+
+.search-box input {
+  width: 100%;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.list-section {
+  margin-top: 14px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.section-title h2 {
+  font-size: 14px;
+}
+
+.tab-list,
+.session-list {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.tab-item,
+.session-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.tab-row,
+.session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tab-title,
+.tab-url,
+.session-name,
+.session-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-title,
+.session-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tab-url,
+.session-meta {
+  font-size: 12px;
+}
+
+.inline-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.inline-actions button {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.compact-button {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.group-list {
+  display: grid;
+  gap: 8px;
+  max-height: 128px;
+  overflow: auto;
+}
+
+.group-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.group-main {
+  min-width: 0;
+}
+
+.group-title,
+.group-meta {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.group-meta {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.star-button {
+  width: 32px;
+  min-height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  font-size: 16px;
+}
+
+.star-button.is-active {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: #eef5ff;
+}
+
+.danger-button {
+  color: var(--danger);
+}
+
+.empty-state {
+  padding: 14px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.status-text {
+  min-height: 18px;
+  margin-top: 12px;
+  font-size: 12px;
+}

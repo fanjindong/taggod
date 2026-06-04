@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "标签之神",
+  "description": "一键整理、搜索、去重和保存上百个 Chrome 标签页。",
+  "version": "0.1.0",
+  "action": {
+    "default_title": "标签之神",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "storage"
+  ],
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+L",
+        "mac": "Command+Shift+L"
+      },
+      "description": "打开标签之神"
+    },
+    "organize-tabs": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "整理当前窗口标签页"
+    },
+    "save-session": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "Command+Shift+S"
+      },
+      "description": "保存当前窗口会话"
+    }
+  }
+}

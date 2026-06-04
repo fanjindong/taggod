@@ -11,6 +11,7 @@ const requiredFiles = [
   'popup.js',
   'README.md',
   'assets/logo.png',
+  'assets/icons/icon-source.png',
   'assets/icons/icon-16.png',
   'assets/icons/icon-32.png',
   'assets/icons/icon-48.png',

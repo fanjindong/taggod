@@ -1,5 +1,7 @@
 # 标签之神
 
+![标签之神 Logo](assets/logo.png)
+
 `标签之神` 是一个 Chrome 标签页管理插件，面向经常同时打开几十到上百个标签页的用户。它用一个弹窗完成整理、搜索、去重、分组和会话保存，尽量减少在标签栏里来回找页面的时间。
 
 ## 功能特性
@@ -80,6 +82,8 @@ node --check popup.js
 
 ```text
 manifest.json          Manifest V3 配置
+assets/logo.png        项目 Logo 原图
+assets/icons/          Chrome 插件图标
 background.js          后台 service worker，处理批量标签操作
 popup.html             弹窗页面结构
 popup.css              弹窗样式

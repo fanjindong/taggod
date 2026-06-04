@@ -9,7 +9,12 @@ const requiredFiles = [
   'popup.html',
   'popup.css',
   'popup.js',
-  'README.md'
+  'README.md',
+  'assets/logo.png',
+  'assets/icons/icon-16.png',
+  'assets/icons/icon-32.png',
+  'assets/icons/icon-48.png',
+  'assets/icons/icon-128.png'
 ];
 
 for (const file of requiredFiles) {
@@ -29,6 +34,10 @@ if (manifest.manifest_version !== 3) {
 
 if (!manifest.permissions.includes('tabs') || !manifest.permissions.includes('tabGroups') || !manifest.permissions.includes('storage')) {
   throw new Error('manifest.json 缺少必要权限');
+}
+
+if (!manifest.icons || !manifest.action || !manifest.action.default_icon) {
+  throw new Error('manifest.json 必须声明插件图标');
 }
 
 for (const scriptFile of ['background.js', 'popup.js']) {

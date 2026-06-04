@@ -36,8 +36,20 @@
 
       <section class="action-grid" aria-label="常用操作">
         <button id="organizeButton" class="primary-action" type="button">整理标签页</button>
-        <button id="closeDuplicatesButton" type="button">关闭重复</button>
-        <button id="saveSessionButton" type="button">保存会话</button>
+        <button id="scanDuplicatesButton" type="button">智能去重</button>
+        <button id="saveWorkspaceButton" type="button">保存工作集</button>
+      </section>
+
+      <section id="duplicateReviewSection" class="list-section is-hidden" aria-label="重复标签确认" hidden>
+        <div class="section-title">
+          <h2>重复确认</h2>
+          <span id="duplicateReviewCount">0 个可关闭</span>
+        </div>
+        <div id="duplicateReviewList" class="duplicate-review-list"></div>
+        <div class="review-actions">
+          <button id="closeSelectedDuplicatesButton" class="danger-button" type="button">关闭已勾选重复标签</button>
+          <button id="cancelDuplicateReviewButton" type="button">取消</button>
+        </div>
       </section>
 
       <section class="list-section">
@@ -62,7 +74,7 @@
 
       <section class="list-section">
         <div class="section-title">
-          <h2>最近会话</h2>
+          <h2>工作集</h2>
         </div>
         <div id="sessionList" class="session-list"></div>
       </section>

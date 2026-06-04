@@ -38,6 +38,33 @@ const COMMON_MULTI_PART_PUBLIC_SUFFIXES = new Set([
   'com.tw'
 ]);
 
+const TRACKING_QUERY_PARAMS = new Set([
+  'utm_source',
+  'utm_medium',
+  'utm_campaign',
+  'utm_content',
+  'utm_term',
+  'ref',
+  'fbclid',
+  'gclid'
+]);
+
+function normalizeUrlForDuplicate(url) {
+  try {
+    const parsedUrl = new URL(url);
+
+    TRACKING_QUERY_PARAMS.forEach((paramName) => {
+      // 只移除明确的追踪参数，避免把业务查询参数误当成重复依据。
+      parsedUrl.searchParams.delete(paramName);
+    });
+
+    return parsedUrl.toString();
+  } catch (error) {
+    // 异常网址不能安全规范化，保留原值可以避免把内部页面错误合并。
+    return String(url || '');
+  }
+}
+
 function isIpAddressHost(hostname) {
   // IP 地址没有可注册主域名，保持原值可以避免把不同内网服务错误合并。
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.includes(':');
@@ -107,6 +134,36 @@ function normalizeSettings(settings) {
   return normalized;
 }
 
+function normalizeWorkspace(workspace) {
+  const createdAt = Number(workspace && workspace.createdAt) || Date.now();
+
+  return Object.assign({}, workspace, {
+    id: workspace && workspace.id ? workspace.id : `session-${createdAt}`,
+    name: workspace && workspace.name ? workspace.name : `${formatDateTime(createdAt)} 的工作集`,
+    createdAt,
+    updatedAt: Number(workspace && workspace.updatedAt) || createdAt,
+    favorite: Boolean(workspace && workspace.favorite),
+    favoritedAt: Number(workspace && workspace.favoritedAt) || 0,
+    activeUrl: workspace && workspace.activeUrl ? workspace.activeUrl : '',
+    tabs: Array.isArray(workspace && workspace.tabs) ? workspace.tabs : [],
+    groups: Array.isArray(workspace && workspace.groups) ? workspace.groups : []
+  });
+}
+
+function sortWorkspaces(workspaces) {
+  return [...workspaces].map(normalizeWorkspace).sort((left, right) => {
+    if (left.favorite !== right.favorite) {
+      return left.favorite ? -1 : 1;
+    }
+
+    if (left.favorite && right.favorite && left.favoritedAt !== right.favoritedAt) {
+      return right.favoritedAt - left.favoritedAt;
+    }
+
+    return right.createdAt - left.createdAt;
+  });
+}
+
 function isPriorityGroup(settings, groupKey) {
   return settings.priorityGroups.some((group) => group.groupKey === groupKey);
 }
@@ -149,25 +206,81 @@ function buildTabSnapshot(tab) {
   };
 }
 
+function chooseDuplicateKeepTab(tabs) {
+  const sortedTabs = [...tabs].sort((left, right) => {
+    if (left.pinned !== right.pinned) {
+      return left.pinned ? -1 : 1;
+    }
+
+    if (left.active !== right.active) {
+      return left.active ? -1 : 1;
+    }
+
+    return left.index - right.index;
+  });
+
+  return sortedTabs[0];
+}
+
+function buildDuplicateGroups(tabs) {
+  const normalizedUrlMap = new Map();
+
+  tabs.forEach((tab) => {
+    if (!tab.url || typeof tab.id !== 'number') {
+      return;
+    }
+
+    const normalizedUrl = normalizeUrlForDuplicate(tab.url);
+    const normalizedTabs = normalizedUrlMap.get(normalizedUrl) || [];
+    normalizedTabs.push(tab);
+    normalizedUrlMap.set(normalizedUrl, normalizedTabs);
+  });
+
+  const duplicateGroups = [];
+
+  normalizedUrlMap.forEach((groupTabs, normalizedUrl) => {
+    if (groupTabs.length <= 1) {
+      return;
+    }
+
+    const originalUrlSet = new Set(groupTabs.map((tab) => tab.url || ''));
+    const reason = originalUrlSet.size === 1 ? '完整网址重复' : '忽略追踪参数后重复';
+    const keepTab = chooseDuplicateKeepTab(groupTabs);
+    const closeTabs = groupTabs
+      .filter((tab) => tab.id !== keepTab.id)
+      .sort((left, right) => left.index - right.index);
+
+    duplicateGroups.push({
+      duplicateKey: normalizedUrl,
+      reason,
+      title: keepTab.title || '未命名标签',
+      groupKey: getDomainKey(keepTab.url || ''),
+      keepTabId: keepTab.id,
+      keepTitle: keepTab.title || '未命名标签',
+      keepUrl: keepTab.url || '',
+      closeTabIds: closeTabs.map((tab) => tab.id),
+      closeCount: closeTabs.length,
+      tabCount: groupTabs.length
+    });
+  });
+
+  return duplicateGroups;
+}
+
 function buildOverview(tabs) {
   const domainSet = new Set();
-  const urlCounter = new Map();
   const groupSet = new Set();
 
   tabs.forEach((tab) => {
     domainSet.add(getDomainKey(tab.url || ''));
-
-    if (tab.url) {
-      urlCounter.set(tab.url, (urlCounter.get(tab.url) || 0) + 1);
-    }
 
     if (typeof tab.groupId === 'number' && tab.groupId >= 0) {
       groupSet.add(tab.groupId);
     }
   });
 
-  const duplicateCount = Array.from(urlCounter.values()).reduce((total, count) => {
-    return count > 1 ? total + count - 1 : total;
+  const duplicateCount = buildDuplicateGroups(tabs).reduce((total, group) => {
+    return total + group.closeCount;
   }, 0);
 
   return {
@@ -187,7 +300,7 @@ async function getPopupState() {
     tabs: tabs.map(buildTabSnapshot),
     groups: buildGroupSummaries(tabs, settings),
     overview: buildOverview(tabs),
-    sessions: stored[STORAGE_KEYS.sessions] || [],
+    sessions: sortWorkspaces(stored[STORAGE_KEYS.sessions] || []),
     settings
   };
 }
@@ -313,62 +426,83 @@ function buildGroupSummaries(tabs, settings) {
   });
 }
 
-async function closeDuplicateTabs() {
+async function scanDuplicateTabs() {
   const tabs = await queryCurrentWindowTabs();
-  const tabsByUrl = new Map();
 
-  tabs.forEach((tab) => {
-    if (!tab.url || typeof tab.id !== 'number') {
-      return;
-    }
-
-    const sameUrlTabs = tabsByUrl.get(tab.url) || [];
-    sameUrlTabs.push(tab);
-    tabsByUrl.set(tab.url, sameUrlTabs);
-  });
-
-  const tabIdsToClose = [];
-
-  tabsByUrl.forEach((sameUrlTabs) => {
-    if (sameUrlTabs.length <= 1) {
-      return;
-    }
-
-    const activeTab = sameUrlTabs.find((tab) => tab.active);
-    const tabToKeep = activeTab || sameUrlTabs.sort((left, right) => left.index - right.index)[0];
-
-    sameUrlTabs.forEach((tab) => {
-      if (tab.id !== tabToKeep.id && typeof tab.id === 'number') {
-        tabIdsToClose.push(tab.id);
-      }
-    });
-  });
-
-  if (tabIdsToClose.length > 0) {
-    await chrome.tabs.remove(tabIdsToClose);
-  }
-
-  return { closedCount: tabIdsToClose.length };
+  return {
+    groups: buildDuplicateGroups(tabs)
+  };
 }
 
-async function saveCurrentSession() {
+async function closeSelectedDuplicateTabs(tabIds) {
+  const safeTabIds = Array.from(new Set(Array.isArray(tabIds) ? tabIds : []))
+    .filter((tabId) => Number.isInteger(tabId));
+
+  if (safeTabIds.length === 0) {
+    return {
+      closedCount: 0,
+      failedCount: 0
+    };
+  }
+
+  try {
+    await chrome.tabs.remove(safeTabIds);
+    return {
+      closedCount: safeTabIds.length,
+      failedCount: 0
+    };
+  } catch (error) {
+    // 批量关闭失败时逐个重试，因为用户可能在确认期间手动关闭了部分标签。
+    let closedCount = 0;
+
+    for (const tabId of safeTabIds) {
+      try {
+        await chrome.tabs.remove(tabId);
+        closedCount += 1;
+      } catch (innerError) {
+        // 单个标签失败只影响统计，不应阻断后续可关闭标签的清理。
+      }
+    }
+
+    return {
+      closedCount,
+      failedCount: safeTabIds.length - closedCount
+    };
+  }
+}
+
+async function closeDuplicateTabs() {
+  const tabs = await queryCurrentWindowTabs();
+  const duplicateGroups = buildDuplicateGroups(tabs);
+  const tabIdsToClose = duplicateGroups.flatMap((group) => group.closeTabIds);
+  const result = await closeSelectedDuplicateTabs(tabIdsToClose);
+
+  return {
+    closedCount: result.closedCount,
+    failedCount: result.failedCount
+  };
+}
+
+async function saveWorkspace(name) {
   const tabs = await queryCurrentWindowTabs();
   const stored = await chrome.storage.local.get([STORAGE_KEYS.sessions, STORAGE_KEYS.settings]);
   const settings = normalizeSettings(stored[STORAGE_KEYS.settings]);
-  const existingSessions = stored[STORAGE_KEYS.sessions] || [];
+  const existingSessions = sortWorkspaces(stored[STORAGE_KEYS.sessions] || []);
   const createdAt = Date.now();
   const snapshots = tabs.map(buildTabSnapshot);
   const activeTab = snapshots.find((tab) => tab.active);
   const groups = buildGroupSnapshots(snapshots);
-  const session = {
+  const workspaceName = String(name || '').trim() || `${formatDateTime(createdAt)} 的工作集`;
+  const workspace = normalizeWorkspace({
     id: `session-${createdAt}`,
-    name: `${formatDateTime(createdAt)} 保存的会话`,
+    name: workspaceName,
     createdAt,
+    updatedAt: createdAt,
     activeUrl: activeTab ? activeTab.url : '',
     tabs: snapshots,
     groups
-  };
-  const sessions = [session, ...existingSessions].slice(0, settings.maxSessionCount);
+  });
+  const sessions = [workspace, ...existingSessions].slice(0, settings.maxSessionCount);
 
   await chrome.storage.local.set({
     [STORAGE_KEYS.sessions]: sessions,
@@ -376,8 +510,44 @@ async function saveCurrentSession() {
   });
 
   return {
-    session,
-    savedCount: snapshots.length
+    workspace,
+    session: workspace,
+    savedCount: snapshots.length,
+    savedTabIds: snapshots
+      .map((tab) => tab.id)
+      .filter((tabId) => Number.isInteger(tabId))
+  };
+}
+
+async function saveCurrentSession() {
+  return saveWorkspace();
+}
+
+async function closeSavedTabs(tabIds) {
+  const safeTabIds = Array.from(new Set(Array.isArray(tabIds) ? tabIds : []))
+    .filter((tabId) => Number.isInteger(tabId));
+
+  if (safeTabIds.length === 0) {
+    return {
+      closedCount: 0,
+      failedCount: 0
+    };
+  }
+
+  let closedCount = 0;
+
+  for (const tabId of safeTabIds) {
+    try {
+      await chrome.tabs.remove(tabId);
+      closedCount += 1;
+    } catch (error) {
+      // 保存成功后用户仍可能手动关闭标签，失败项只反馈数量，避免清场中断。
+    }
+  }
+
+  return {
+    closedCount,
+    failedCount: safeTabIds.length - closedCount
   };
 }
 
@@ -404,6 +574,103 @@ async function togglePriorityGroup(groupKey) {
     groupKey,
     starred,
     priorityCount: settings.priorityGroups.length
+  };
+}
+
+async function updateStoredWorkspaces(updater) {
+  const stored = await chrome.storage.local.get([STORAGE_KEYS.sessions]);
+  const workspaces = sortWorkspaces(stored[STORAGE_KEYS.sessions] || []);
+  const nextWorkspaces = updater(workspaces).map(normalizeWorkspace);
+  const sortedNextWorkspaces = sortWorkspaces(nextWorkspaces);
+
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.sessions]: sortedNextWorkspaces
+  });
+
+  return sortedNextWorkspaces;
+}
+
+async function renameWorkspace(workspaceId, name) {
+  const trimmedName = String(name || '').trim();
+
+  if (!trimmedName) {
+    throw new Error('工作集名称不能为空');
+  }
+
+  let renamedWorkspace = null;
+
+  await updateStoredWorkspaces((workspaces) => {
+    return workspaces.map((workspace) => {
+      if (workspace.id !== workspaceId) {
+        return workspace;
+      }
+
+      renamedWorkspace = normalizeWorkspace(Object.assign({}, workspace, {
+        name: trimmedName,
+        updatedAt: Date.now()
+      }));
+      return renamedWorkspace;
+    });
+  });
+
+  if (!renamedWorkspace) {
+    throw new Error('没有找到要重命名的工作集');
+  }
+
+  return {
+    workspace: renamedWorkspace
+  };
+}
+
+async function deleteWorkspace(workspaceId) {
+  let deletedCount = 0;
+
+  await updateStoredWorkspaces((workspaces) => {
+    return workspaces.filter((workspace) => {
+      if (workspace.id === workspaceId) {
+        deletedCount += 1;
+        return false;
+      }
+
+      return true;
+    });
+  });
+
+  if (deletedCount === 0) {
+    throw new Error('没有找到要删除的工作集');
+  }
+
+  return {
+    deletedCount
+  };
+}
+
+async function toggleWorkspaceFavorite(workspaceId) {
+  let updatedWorkspace = null;
+
+  await updateStoredWorkspaces((workspaces) => {
+    return workspaces.map((workspace) => {
+      if (workspace.id !== workspaceId) {
+        return workspace;
+      }
+
+      const nextFavorite = !workspace.favorite;
+      updatedWorkspace = normalizeWorkspace(Object.assign({}, workspace, {
+        favorite: nextFavorite,
+        favoritedAt: nextFavorite ? Date.now() : 0,
+        updatedAt: Date.now()
+      }));
+      return updatedWorkspace;
+    });
+  });
+
+  if (!updatedWorkspace) {
+    throw new Error('没有找到要收藏的工作集');
+  }
+
+  return {
+    workspace: updatedWorkspace,
+    favorite: updatedWorkspace.favorite
   };
 }
 
@@ -436,17 +703,40 @@ function formatDateTime(timestamp) {
   }).format(new Date(timestamp));
 }
 
-async function restoreSession(sessionId) {
+async function restoreSession(sessionId, options = {}) {
   const stored = await chrome.storage.local.get([STORAGE_KEYS.sessions]);
-  const sessions = stored[STORAGE_KEYS.sessions] || [];
+  const sessions = sortWorkspaces(stored[STORAGE_KEYS.sessions] || []);
   const session = sessions.find((item) => item.id === sessionId);
 
   if (!session) {
-    throw new Error('没有找到要恢复的会话');
+    throw new Error('没有找到要恢复的工作集');
   }
 
   const createdTabs = [];
   let failedCount = 0;
+  let targetWindowId = null;
+  let createdFirstRestorableTab = false;
+
+  if (options.newWindow) {
+    const firstRestorableTab = session.tabs.find((tab) => tab.url && !tab.url.startsWith('chrome://'));
+
+    if (!firstRestorableTab) {
+      throw new Error('工作集中没有可恢复的页面');
+    }
+
+    const createdWindow = await chrome.windows.create({
+      url: firstRestorableTab.url,
+      focused: true
+    });
+    targetWindowId = createdWindow.id;
+    createdFirstRestorableTab = true;
+
+    if (createdWindow.tabs && createdWindow.tabs[0]) {
+      createdTabs.push(Object.assign({}, createdWindow.tabs[0], {
+        groupKey: firstRestorableTab.groupKey
+      }));
+    }
+  }
 
   for (const tab of session.tabs) {
     if (!tab.url || tab.url.startsWith('chrome://')) {
@@ -455,11 +745,18 @@ async function restoreSession(sessionId) {
       continue;
     }
 
+    if (createdFirstRestorableTab) {
+      // 新窗口创建必须先带一个 URL，这个首个页面已经存在，避免重复恢复同一条记录。
+      createdFirstRestorableTab = false;
+      continue;
+    }
+
     try {
       const createdTab = await chrome.tabs.create({
         url: tab.url,
         active: false,
-        pinned: Boolean(tab.pinned)
+        pinned: Boolean(tab.pinned),
+        windowId: targetWindowId || undefined
       });
       createdTabs.push(Object.assign({}, createdTab, { groupKey: tab.groupKey }));
     } catch (error) {
@@ -499,7 +796,7 @@ async function regroupRestoredTabs(tabs) {
 
   for (const [groupKey, tabIds] of groups.entries()) {
     if (tabIds.length < 2) {
-      // 恢复会话时沿用同一规则，避免单标签主域名在恢复后变成多余分组。
+      // 恢复工作集时沿用同一规则，避免单标签主域名在恢复后变成多余分组。
       continue;
     }
 
@@ -554,8 +851,44 @@ async function handleMessage(message) {
     return closeDuplicateTabs();
   }
 
+  if (action === 'scan-duplicates') {
+    return scanDuplicateTabs();
+  }
+
+  if (action === 'close-selected-duplicates') {
+    return closeSelectedDuplicateTabs(message.tabIds);
+  }
+
+  if (action === 'save-workspace') {
+    return saveWorkspace(message.name);
+  }
+
+  if (action === 'close-saved-tabs') {
+    return closeSavedTabs(message.tabIds);
+  }
+
+  if (action === 'restore-workspace') {
+    return restoreSession(message.workspaceId || message.sessionId);
+  }
+
+  if (action === 'restore-workspace-new-window') {
+    return restoreSession(message.workspaceId || message.sessionId, { newWindow: true });
+  }
+
+  if (action === 'rename-workspace') {
+    return renameWorkspace(message.workspaceId, message.name);
+  }
+
+  if (action === 'delete-workspace') {
+    return deleteWorkspace(message.workspaceId);
+  }
+
+  if (action === 'toggle-workspace-favorite') {
+    return toggleWorkspaceFavorite(message.workspaceId);
+  }
+
   if (action === 'save-session') {
-    return saveCurrentSession();
+    return saveWorkspace(message.name);
   }
 
   if (action === 'restore-session') {

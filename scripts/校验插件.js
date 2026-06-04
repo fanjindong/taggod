@@ -100,4 +100,64 @@ assert.deepStrictEqual(sortedSamePrimaryDomainUrls, [
   'https://mail.google.com/inbox'
 ]);
 
+const duplicateTabs = [
+  { id: 1, title: '文章', url: 'https://example.com/a?utm_source=news&x=1', active: false, pinned: false, index: 0 },
+  { id: 2, title: '文章副本', url: 'https://example.com/a?x=1&utm_medium=email', active: true, pinned: false, index: 1 },
+  { id: 3, title: '文章固定', url: 'https://example.com/a?x=1&utm_campaign=spring', active: false, pinned: true, index: 2 },
+  { id: 4, title: '不同锚点', url: 'https://example.com/a?x=1#section', active: false, pinned: false, index: 3 }
+];
+
+assert.strictEqual(
+  backgroundSandbox.normalizeUrlForDuplicate('https://example.com/a?utm_source=news&x=1'),
+  'https://example.com/a?x=1'
+);
+assert.strictEqual(
+  backgroundSandbox.normalizeUrlForDuplicate('https://example.com/a?x=1#section'),
+  'https://example.com/a?x=1#section'
+);
+
+const duplicateGroups = backgroundSandbox.buildDuplicateGroups(duplicateTabs);
+assert.strictEqual(duplicateGroups.length, 1);
+assert.strictEqual(duplicateGroups[0].reason, '忽略追踪参数后重复');
+assert.strictEqual(duplicateGroups[0].keepTabId, 3);
+// vm 沙箱返回的数组原型不同，转成本上下文数组后再比较内容，避免误判业务结果。
+assert.deepStrictEqual(Array.from(duplicateGroups[0].closeTabIds), [1, 2]);
+
+const exactDuplicateGroups = backgroundSandbox.buildDuplicateGroups([
+  { id: 10, title: '同页', url: 'https://example.com/same', active: false, pinned: false, index: 2 },
+  { id: 11, title: '同页', url: 'https://example.com/same', active: false, pinned: false, index: 1 }
+]);
+assert.strictEqual(exactDuplicateGroups[0].reason, '完整网址重复');
+assert.strictEqual(exactDuplicateGroups[0].keepTabId, 11);
+
+const workspaceItems = backgroundSandbox.sortWorkspaces([
+  { id: 'a', name: '旧收藏', createdAt: 1, favorite: true, favoritedAt: 10, tabs: [], groups: [] },
+  { id: 'b', name: '新普通', createdAt: 20, favorite: false, tabs: [], groups: [] },
+  { id: 'c', name: '新收藏', createdAt: 5, favorite: true, favoritedAt: 30, tabs: [], groups: [] }
+]);
+// 工作集列表来自后台沙箱，显式转数组可以让断言只关注排序契约。
+assert.deepStrictEqual(Array.from(workspaceItems, (item) => item.id), ['c', 'a', 'b']);
+
+const oldWorkspace = backgroundSandbox.normalizeWorkspace({
+  id: 'session-1',
+  name: '旧会话',
+  createdAt: 1,
+  tabs: [],
+  groups: []
+});
+assert.strictEqual(oldWorkspace.favorite, false);
+assert.strictEqual(oldWorkspace.favoritedAt, 0);
+assert.strictEqual(oldWorkspace.updatedAt, 1);
+
+const popupHtml = fs.readFileSync(path.join(rootDir, 'popup.html'), 'utf8');
+const readmeContent = fs.readFileSync(path.join(rootDir, 'README.md'), 'utf8');
+
+// 弹窗和说明文档必须同时展示核心中文文案，避免功能已实现但入口或文档仍停留在旧“会话”命名。
+assert.ok(popupHtml.includes('智能去重'));
+assert.ok(popupHtml.includes('保存工作集'));
+assert.ok(popupHtml.includes('工作集'));
+assert.ok(readmeContent.includes('智能去重'));
+assert.ok(readmeContent.includes('保存工作集'));
+assert.ok(readmeContent.includes('工作集'));
+
 console.log('插件文件校验通过');

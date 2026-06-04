@@ -47,7 +47,7 @@
         "default": "Ctrl+Shift+S",
         "mac": "Command+Shift+S"
       },
-      "description": "保存当前窗口会话"
+      "description": "保存当前窗口为工作集"
     }
   }
 }

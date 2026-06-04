@@ -268,6 +268,90 @@ button:disabled {
   color: var(--danger);
 }
 
+/* 与 hidden 属性双保险，避免确认区收起时仍占用弹窗高度。 */
+.is-hidden {
+  display: none !important;
+}
+
+.duplicate-review-list {
+  display: grid;
+  gap: 8px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.duplicate-review-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: flex-start;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.duplicate-review-item input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+}
+
+.duplicate-review-main {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.duplicate-review-main strong,
+.duplicate-review-main span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.duplicate-review-main strong {
+  font-size: 13px;
+}
+
+.duplicate-review-main span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.review-actions button {
+  flex: 1 1 150px;
+  padding: 0 10px;
+}
+
+.session-actions {
+  flex-wrap: wrap;
+}
+
+.session-actions button {
+  flex: 1 1 64px;
+}
+
+/* 保存后的关闭入口需要醒目，但仍保持用户二次确认的弱破坏感。 */
+.close-saved-button {
+  width: 100%;
+  border-color: #f2b8b5;
+  background: #fff5f5;
+  font-weight: 600;
+}
+
+.close-saved-button:hover {
+  background: #ffeceb;
+}
+
 .empty-state {
   padding: 14px;
   border: 1px dashed var(--line);

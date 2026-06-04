@@ -107,4 +107,4 @@ docs/                  设计文档和实现计划
 
 ## 许可证
 
-许可证尚未选择。开源发布前建议补充 `LICENSE` 文件，并在本节写明许可证类型。
+本项目基于 MIT 许可证开源，详见 [LICENSE](/Users/fanjindong/Public/tabgod/LICENSE)。

@@ -10,82 +10,79 @@
     <main class="popup-shell">
       <header class="popup-header">
         <div>
-          <h1>标签之神</h1>
-          <p id="summaryText">正在读取标签页</p>
+          <h1>快速切换</h1>
+          <p id="summaryText">打开后默认展示最近使用页面</p>
         </div>
       </header>
 
-      <section class="stats-grid" aria-label="标签概览">
-        <article class="stat-item">
-          <strong id="tabCount">0</strong>
-          <span>标签</span>
-        </article>
-        <article class="stat-item">
-          <strong id="domainCount">0</strong>
-          <span>主域名</span>
-        </article>
-        <article class="stat-item">
-          <strong id="duplicateCount">0</strong>
-          <span>重复</span>
-        </article>
-        <article class="stat-item">
-          <strong id="groupCount">0</strong>
-          <span>分组</span>
-        </article>
-      </section>
-
-      <section class="action-grid" aria-label="常用操作">
-        <button id="organizeButton" class="primary-action" type="button">整理标签页</button>
-        <button id="scanDuplicatesButton" type="button">智能去重</button>
-        <button id="saveWorkspaceButton" type="button">保存工作集</button>
-      </section>
-
-      <section class="settings-strip" aria-label="整理设置">
-        <label class="setting-field" for="minTabsPerGroupInput">
-          <span>分组阈值</span>
-          <input id="minTabsPerGroupInput" type="number" min="1" step="1" inputmode="numeric">
-        </label>
-        <span class="setting-unit">个标签</span>
-        <button id="saveGroupThresholdButton" class="compact-button" type="button">保存</button>
-      </section>
-
-      <section id="duplicateReviewSection" class="list-section is-hidden" aria-label="重复标签确认" hidden>
-        <div class="section-title">
-          <h2>重复确认</h2>
-          <span id="duplicateReviewCount">0 个可关闭</span>
-        </div>
-        <div id="duplicateReviewList" class="duplicate-review-list"></div>
-        <div class="review-actions">
-          <button id="closeSelectedDuplicatesButton" class="danger-button" type="button">关闭已勾选重复标签</button>
-          <button id="cancelDuplicateReviewButton" type="button">取消</button>
-        </div>
-      </section>
-
-      <section class="list-section">
-        <div class="section-title">
-          <h2>优先分组</h2>
-        </div>
-        <div id="groupList" class="group-list"></div>
-      </section>
-
-      <label class="search-box">
-        <span>搜索标签</span>
-        <input id="searchInput" type="search" placeholder="输入标题、网址或主域名">
+      <label class="search-box quick-search-box">
+        <span>搜索已打开标签</span>
+        <input id="searchInput" type="search" placeholder="输入标题、网址或主域名" autocomplete="off">
       </label>
 
-      <section class="list-section">
-        <div class="section-title">
-          <h2>当前标签</h2>
-          <span id="visibleCount">0 个结果</span>
-        </div>
-        <div id="tabList" class="tab-list"></div>
+      <section class="quick-status" aria-label="标签概览">
+        <span id="quickStatusText">正在读取标签页</span>
+        <span id="duplicateHintText"></span>
       </section>
 
-      <section class="list-section">
+      <section class="list-section quick-results-section" aria-label="快速切换结果">
         <div class="section-title">
-          <h2>工作集</h2>
+          <h2 id="resultTitle">最近使用</h2>
+          <span id="visibleCount">0 个结果</span>
         </div>
-        <div id="sessionList" class="session-list"></div>
+        <div id="searchResultList" class="tab-list quick-result-list"></div>
+      </section>
+
+      <section class="action-grid quick-action-grid" aria-label="常用操作">
+        <button id="organizeButton" class="primary-action" type="button">整理当前窗口</button>
+        <button id="moreToolsButton" type="button" aria-expanded="false" aria-controls="moreToolsSection">更多工具</button>
+      </section>
+
+      <section id="moreToolsSection" class="more-tools-section is-hidden" aria-label="更多工具" hidden>
+        <section class="settings-strip" aria-label="整理设置">
+          <label class="setting-field" for="minTabsPerGroupInput">
+            <span>分组阈值</span>
+            <input id="minTabsPerGroupInput" type="number" min="1" step="1" inputmode="numeric">
+          </label>
+          <span class="setting-unit">个标签</span>
+          <button id="saveGroupThresholdButton" class="compact-button" type="button">保存</button>
+        </section>
+
+        <section id="duplicateReviewSection" class="list-section is-hidden" aria-label="重复标签确认" hidden>
+          <div class="section-title">
+            <h2>重复确认</h2>
+            <span id="duplicateReviewCount">0 个可关闭</span>
+          </div>
+          <div id="duplicateReviewList" class="duplicate-review-list"></div>
+          <div class="review-actions">
+            <button id="closeSelectedDuplicatesButton" class="danger-button" type="button">关闭已勾选重复标签</button>
+            <button id="cancelDuplicateReviewButton" type="button">取消</button>
+          </div>
+        </section>
+
+        <section class="list-section">
+          <div class="section-title">
+            <h2>管理操作</h2>
+          </div>
+          <div class="tool-button-grid">
+            <button id="scanDuplicatesButton" type="button">智能去重</button>
+            <button id="saveWorkspaceButton" type="button">保存工作集</button>
+          </div>
+        </section>
+
+        <section class="list-section">
+          <div class="section-title">
+            <h2>优先分组</h2>
+          </div>
+          <div id="groupList" class="group-list"></div>
+        </section>
+
+        <section class="list-section">
+          <div class="section-title">
+            <h2>工作集</h2>
+          </div>
+          <div id="sessionList" class="session-list"></div>
+        </section>
       </section>
 
       <p id="statusText" class="status-text" role="status"></p>

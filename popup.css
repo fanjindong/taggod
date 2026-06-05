@@ -63,6 +63,10 @@ h1 {
   grid-template-columns: 1.2fr 1fr 1fr;
 }
 
+.quick-action-grid {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .settings-strip {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -149,6 +153,10 @@ button:disabled {
   font-size: 13px;
 }
 
+.quick-search-box {
+  margin-top: 14px;
+}
+
 .search-box input {
   width: 100%;
   height: 36px;
@@ -156,6 +164,24 @@ button:disabled {
   border-radius: 8px;
   padding: 0 10px;
   font-size: 13px;
+}
+
+.quick-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 22px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.quick-status span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .list-section {
@@ -189,6 +215,42 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
+}
+
+.quick-results-section {
+  margin-top: 10px;
+}
+
+.quick-result-list {
+  max-height: 340px;
+}
+
+.quick-result-item {
+  width: 100%;
+  min-height: 54px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  text-align: left;
+}
+
+.quick-result-item.is-selected {
+  border-color: var(--primary);
+  background: #eef5ff;
+}
+
+.quick-result-main {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.quick-result-meta {
+  max-width: 112px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tab-row,
@@ -236,6 +298,18 @@ button:disabled {
   min-height: 28px;
   padding: 0 8px;
   font-size: 12px;
+}
+
+.more-tools-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.tool-button-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .group-list {

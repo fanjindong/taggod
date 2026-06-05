@@ -3,6 +3,7 @@ const state = {
   groups: [],
   sessions: [],
   settings: {
+    minTabsPerGroup: 2,
     priorityGroups: []
   },
   overview: {
@@ -63,6 +64,7 @@ function bindEvents() {
   document.getElementById('organizeButton').addEventListener('click', () => runAction('organize-tabs'));
   document.getElementById('scanDuplicatesButton').addEventListener('click', scanDuplicates);
   document.getElementById('saveWorkspaceButton').addEventListener('click', saveWorkspace);
+  document.getElementById('saveGroupThresholdButton').addEventListener('click', saveGroupThreshold);
   document.getElementById('closeSelectedDuplicatesButton').addEventListener('click', closeSelectedDuplicates);
   document.getElementById('cancelDuplicateReviewButton').addEventListener('click', () => {
     state.duplicateReview.visible = false;
@@ -143,6 +145,31 @@ async function closeSelectedDuplicates() {
   }
 }
 
+async function saveGroupThreshold() {
+  const input = document.getElementById('minTabsPerGroupInput');
+  const minTabsPerGroup = Number(input.value);
+
+  if (!Number.isInteger(minTabsPerGroup) || minTabsPerGroup < 1) {
+    setStatus('分组阈值必须是不小于 1 的整数');
+    return;
+  }
+
+  setBusy(true);
+
+  try {
+    const result = await sendMessage('update-settings', {
+      settings: { minTabsPerGroup }
+    });
+    state.settings = result.settings || state.settings;
+    setStatus(`已保存分组阈值：至少 ${state.settings.minTabsPerGroup} 个标签，已重新梳理当前窗口分组`);
+    await loadState({ keepStatus: true });
+  } catch (error) {
+    setStatus(error.message || '保存分组阈值失败');
+  } finally {
+    setBusy(false);
+  }
+}
+
 async function saveWorkspace() {
   const defaultName = getDefaultWorkspaceName();
   const name = window.prompt('请输入工作集名称', defaultName);
@@ -207,11 +234,16 @@ function getDefaultWorkspaceName() {
 }
 
 function render() {
+  renderSettings();
   renderOverview();
   renderGroups();
   renderDuplicateReview();
   renderTabs();
   renderSessions();
+}
+
+function renderSettings() {
+  document.getElementById('minTabsPerGroupInput').value = state.settings.minTabsPerGroup || 2;
 }
 
 function renderOverview() {
@@ -234,9 +266,10 @@ function renderGroups() {
   state.groups.forEach((group) => {
     const item = document.createElement('article');
     item.className = 'group-item';
+    const groupTooltip = group.title === group.groupKey ? group.groupKey : `${group.title}（${group.groupKey}）`;
     item.innerHTML = `
       <div class="group-main">
-        <span class="group-title" title="${escapeHtml(group.title)}">${escapeHtml(group.title)}</span>
+        <span class="group-title" title="${escapeHtml(groupTooltip)}">${escapeHtml(group.title)}</span>
         <span class="group-meta">${group.tabCount} 个标签${group.starred ? ' · 优先' : ''}</span>
       </div>
       <button
@@ -322,6 +355,7 @@ function renderTabs() {
   visibleTabs.forEach((tab) => {
     const item = document.createElement('article');
     item.className = 'tab-item';
+    const groupTitle = tab.groupTitle || tab.groupKey;
     item.innerHTML = `
       <div class="tab-row">
         <div class="tab-title" title="${escapeHtml(tab.title)}">${escapeHtml(tab.title)}</div>
@@ -330,7 +364,7 @@ function renderTabs() {
           <button class="danger-button" type="button" data-action="close" data-tab-id="${tab.id}">关闭</button>
         </div>
       </div>
-      <div class="tab-url" title="${escapeHtml(tab.url)}">${escapeHtml(tab.groupKey)} · ${escapeHtml(tab.url)}</div>
+      <div class="tab-url" title="${escapeHtml(tab.groupKey)} · ${escapeHtml(tab.url)}">${escapeHtml(groupTitle)} · ${escapeHtml(tab.url)}</div>
     `;
     tabList.appendChild(item);
   });
@@ -446,7 +480,7 @@ function getVisibleTabs() {
   }
 
   return state.tabs.filter((tab) => {
-    const searchable = `${tab.title} ${tab.url} ${tab.groupKey}`.toLowerCase();
+    const searchable = `${tab.title} ${tab.url} ${tab.groupKey} ${tab.groupTitle || ''}`.toLowerCase();
     return searchable.includes(state.query);
   });
 }

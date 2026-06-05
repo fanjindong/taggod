@@ -6,6 +6,8 @@ const STORAGE_KEYS = {
 const DEFAULT_SETTINGS = {
   // 限制保存数量是为了避免本地存储无限增长，同时保留最近的工作现场。
   maxSessionCount: 10,
+  // 默认至少两个同主域名标签才建组，原因是单标签分组通常只会增加标签栏噪音。
+  minTabsPerGroup: 2,
   organizeWithGroups: true,
   duplicateKeepStrategy: 'active-or-left',
   priorityGroups: []
@@ -123,8 +125,20 @@ function getGroupColor(index) {
   return GROUP_COLORS[index % GROUP_COLORS.length];
 }
 
+function normalizeMinTabsPerGroup(value) {
+  const numericValue = typeof value === 'number' ? value : Number.NaN;
+
+  if (!Number.isInteger(numericValue) || numericValue < 1) {
+    // 阈值必须至少为 1，原因是 0 或负数会让“至少几个标签才分组”的语义失效。
+    return DEFAULT_SETTINGS.minTabsPerGroup;
+  }
+
+  return numericValue;
+}
+
 function normalizeSettings(settings) {
   const normalized = Object.assign({}, DEFAULT_SETTINGS, settings || {});
+  normalized.minTabsPerGroup = normalizeMinTabsPerGroup(normalized.minTabsPerGroup);
 
   if (!Array.isArray(normalized.priorityGroups)) {
     // 旧版本没有该字段，兜底为空数组可以兼容已经安装过的用户配置。
@@ -162,6 +176,61 @@ function sortWorkspaces(workspaces) {
 
     return right.createdAt - left.createdAt;
   });
+}
+
+function shouldCreateNativeGroup(tabIds, settings) {
+  const normalizedSettings = normalizeSettings(settings);
+
+  // 所有建组入口统一走这里，避免整理和恢复使用不同阈值。
+  return Array.isArray(tabIds) && tabIds.length >= normalizedSettings.minTabsPerGroup;
+}
+
+function getShortGroupTitle(groupKey) {
+  const normalizedGroupKey = String(groupKey || '其他').toLowerCase().replace(/\.$/, '');
+
+  if (!normalizedGroupKey || normalizedGroupKey === '其他' || isIpAddressHost(normalizedGroupKey)) {
+    // 无法确认公共后缀的特殊分组保持原样，避免把兜底名称或 IP 地址截断成难懂内容。
+    return normalizedGroupKey || '其他';
+  }
+
+  const parts = normalizedGroupKey.split('.').filter(Boolean);
+
+  if (parts.length <= 1) {
+    return normalizedGroupKey;
+  }
+
+  const multiPartSuffix = parts.slice(-2).join('.');
+
+  if (COMMON_MULTI_PART_PUBLIC_SUFFIXES.has(multiPartSuffix)) {
+    // 多级公共后缀要整体省略，否则 example.com.cn 会只变成 example.com。
+    return parts.slice(0, -2).join('.') || normalizedGroupKey;
+  }
+
+  return parts.slice(0, -1).join('.') || normalizedGroupKey;
+}
+
+function buildGroupTitleMap(groupKeys) {
+  const uniqueGroupKeys = Array.from(new Set((Array.isArray(groupKeys) ? groupKeys : [])
+    .map((groupKey) => String(groupKey || '其他'))));
+  const titleBuckets = new Map();
+  const titleMap = new Map();
+
+  uniqueGroupKeys.forEach((groupKey) => {
+    const shortTitle = getShortGroupTitle(groupKey);
+    const bucket = titleBuckets.get(shortTitle) || [];
+    bucket.push(groupKey);
+    titleBuckets.set(shortTitle, bucket);
+  });
+
+  uniqueGroupKeys.forEach((groupKey) => {
+    const shortTitle = getShortGroupTitle(groupKey);
+    const conflictGroupKeys = titleBuckets.get(shortTitle) || [];
+
+    // 短名冲突时回退完整主域名，原因是 foo.com 和 foo.net 不能都显示成 foo。
+    titleMap.set(groupKey, conflictGroupKeys.length > 1 ? groupKey : shortTitle);
+  });
+
+  return titleMap;
 }
 
 function isPriorityGroup(settings, groupKey) {
@@ -204,6 +273,15 @@ function buildTabSnapshot(tab) {
     index: Number.isInteger(tab.index) ? tab.index : 0,
     groupKey
   };
+}
+
+function buildTabSnapshots(tabs) {
+  const snapshots = tabs.map(buildTabSnapshot);
+  const titleMap = buildGroupTitleMap(snapshots.map((tab) => tab.groupKey));
+
+  return snapshots.map((snapshot) => Object.assign({}, snapshot, {
+    groupTitle: titleMap.get(snapshot.groupKey) || snapshot.groupKey
+  }));
 }
 
 function chooseDuplicateKeepTab(tabs) {
@@ -297,7 +375,7 @@ async function getPopupState() {
   const settings = normalizeSettings(stored[STORAGE_KEYS.settings]);
 
   return {
-    tabs: tabs.map(buildTabSnapshot),
+    tabs: buildTabSnapshots(tabs),
     groups: buildGroupSummaries(tabs, settings),
     overview: buildOverview(tabs),
     sessions: sortWorkspaces(stored[STORAGE_KEYS.sessions] || []),
@@ -358,23 +436,50 @@ async function organizeTabs() {
     }
   }
 
-  const movedTabs = await queryCurrentWindowTabs();
+  const reconcileResult = await reconcileCurrentWindowGroups(settings);
+
+  return {
+    organizedCount: tabs.length,
+    groupCount: reconcileResult.groupedCount
+  };
+}
+
+async function reconcileCurrentWindowGroups(settings) {
+  const normalizedSettings = normalizeSettings(settings);
+  const tabs = await queryCurrentWindowTabs();
   const groups = new Map();
 
-  movedTabs.forEach((tab) => {
-    if (!tab.pinned && typeof tab.id === 'number') {
-      const groupKey = getDomainKey(tab.url || '');
-      const groupTabs = groups.get(groupKey) || [];
-      groupTabs.push(tab.id);
-      groups.set(groupKey, groupTabs);
+  tabs.forEach((tab) => {
+    if (tab.pinned || typeof tab.id !== 'number') {
+      return;
     }
+
+    const groupKey = getDomainKey(tab.url || '');
+    const groupTabs = groups.get(groupKey) || [];
+    groupTabs.push(tab);
+    groups.set(groupKey, groupTabs);
   });
 
-  let groupIndex = 0;
+  let groupedCount = 0;
+  let ungroupedTabCount = 0;
+  const titleMap = buildGroupTitleMap(Array.from(groups.keys()));
 
-  for (const [groupKey, tabIds] of groups.entries()) {
-    if (tabIds.length < 2) {
-      // 单个标签创建原生分组会增加标签栏噪音，只对真正聚合了多个标签的主域名建组。
+  for (const [groupKey, groupTabs] of groups.entries()) {
+    const tabIds = groupTabs.map((tab) => tab.id);
+
+    if (!shouldCreateNativeGroup(tabIds, normalizedSettings)) {
+      const groupedTabIds = groupTabs
+        .filter((tab) => typeof tab.groupId === 'number' && tab.groupId >= 0)
+        .map((tab) => tab.id);
+
+      if (groupedTabIds.length > 0) {
+        // 配置调高后，旧原生分组不再满足阈值，必须取消才能让当前页面状态和配置一致。
+        const ungroupedCount = await chrome.tabs.ungroup(groupedTabIds)
+          .then(() => groupedTabIds.length)
+          .catch(() => 0);
+        ungroupedTabCount += ungroupedCount;
+      }
+
       continue;
     }
 
@@ -382,16 +487,16 @@ async function organizeTabs() {
 
     if (typeof groupId === 'number') {
       await chrome.tabGroups.update(groupId, {
-        title: groupKey,
-        color: getGroupColor(groupIndex)
+        title: titleMap.get(groupKey) || groupKey,
+        color: getGroupColor(groupedCount)
       });
-      groupIndex += 1;
+      groupedCount += 1;
     }
   }
 
   return {
-    organizedCount: tabs.length,
-    groupCount: groupIndex
+    groupedCount,
+    ungroupedTabCount
   };
 }
 
@@ -413,6 +518,8 @@ function buildGroupSummaries(tabs, settings) {
     groupMap.set(groupKey, summary);
   });
 
+  const titleMap = buildGroupTitleMap(Array.from(groupMap.keys()));
+
   return Array.from(groupMap.values()).sort((left, right) => {
     if (left.starred !== right.starred) {
       return left.starred ? -1 : 1;
@@ -423,7 +530,9 @@ function buildGroupSummaries(tabs, settings) {
     }
 
     return left.groupKey.localeCompare(right.groupKey, 'zh-CN');
-  });
+  }).map((summary) => Object.assign({}, summary, {
+    title: titleMap.get(summary.groupKey) || summary.groupKey
+  }));
 }
 
 async function scanDuplicateTabs() {
@@ -577,6 +686,22 @@ async function togglePriorityGroup(groupKey) {
   };
 }
 
+async function updateSettings(partialSettings) {
+  const stored = await chrome.storage.local.get([STORAGE_KEYS.settings]);
+  const settings = normalizeSettings(Object.assign(
+    {},
+    stored[STORAGE_KEYS.settings] || {},
+    partialSettings || {}
+  ));
+
+  await chrome.storage.local.set({ [STORAGE_KEYS.settings]: settings });
+  const reconcileResult = await reconcileCurrentWindowGroups(settings);
+
+  return Object.assign({
+    settings
+  }, reconcileResult);
+}
+
 async function updateStoredWorkspaces(updater) {
   const stored = await chrome.storage.local.get([STORAGE_KEYS.sessions]);
   const workspaces = sortWorkspaces(stored[STORAGE_KEYS.sessions] || []);
@@ -681,7 +806,7 @@ function buildGroupSnapshots(tabs) {
     const groupKey = tab.groupKey || '其他';
     const snapshot = groupMap.get(groupKey) || {
       groupKey,
-      title: groupKey,
+      title: tab.groupTitle || groupKey,
       color: getGroupColor(groupMap.size),
       tabCount: 0
     };
@@ -690,7 +815,11 @@ function buildGroupSnapshots(tabs) {
     groupMap.set(groupKey, snapshot);
   });
 
-  return Array.from(groupMap.values());
+  const titleMap = buildGroupTitleMap(Array.from(groupMap.keys()));
+
+  return Array.from(groupMap.values()).map((snapshot) => Object.assign({}, snapshot, {
+    title: titleMap.get(snapshot.groupKey) || snapshot.title
+  }));
 }
 
 function formatDateTime(timestamp) {
@@ -704,8 +833,9 @@ function formatDateTime(timestamp) {
 }
 
 async function restoreSession(sessionId, options = {}) {
-  const stored = await chrome.storage.local.get([STORAGE_KEYS.sessions]);
+  const stored = await chrome.storage.local.get([STORAGE_KEYS.sessions, STORAGE_KEYS.settings]);
   const sessions = sortWorkspaces(stored[STORAGE_KEYS.sessions] || []);
+  const settings = normalizeSettings(stored[STORAGE_KEYS.settings]);
   const session = sessions.find((item) => item.id === sessionId);
 
   if (!session) {
@@ -764,7 +894,7 @@ async function restoreSession(sessionId, options = {}) {
     }
   }
 
-  await regroupRestoredTabs(createdTabs);
+  await regroupRestoredTabs(createdTabs, settings);
 
   const tabToActivate = createdTabs.find((tab) => tab.url === session.activeUrl) || createdTabs[0];
 
@@ -778,7 +908,7 @@ async function restoreSession(sessionId, options = {}) {
   };
 }
 
-async function regroupRestoredTabs(tabs) {
+async function regroupRestoredTabs(tabs, settings = DEFAULT_SETTINGS) {
   const groups = new Map();
 
   tabs.forEach((tab) => {
@@ -793,10 +923,11 @@ async function regroupRestoredTabs(tabs) {
   });
 
   let groupIndex = 0;
+  const titleMap = buildGroupTitleMap(Array.from(groups.keys()));
 
   for (const [groupKey, tabIds] of groups.entries()) {
-    if (tabIds.length < 2) {
-      // 恢复工作集时沿用同一规则，避免单标签主域名在恢复后变成多余分组。
+    if (!shouldCreateNativeGroup(tabIds, settings)) {
+      // 恢复工作集时沿用用户阈值，避免恢复后出现用户刚刚选择隐藏的低数量分组。
       continue;
     }
 
@@ -804,7 +935,7 @@ async function regroupRestoredTabs(tabs) {
 
     if (typeof groupId === 'number') {
       await chrome.tabGroups.update(groupId, {
-        title: groupKey,
+        title: titleMap.get(groupKey) || groupKey,
         color: getGroupColor(groupIndex)
       });
       groupIndex += 1;
@@ -897,6 +1028,10 @@ async function handleMessage(message) {
 
   if (action === 'toggle-priority-group') {
     return togglePriorityGroup(message.groupKey);
+  }
+
+  if (action === 'update-settings') {
+    return updateSettings(message.settings);
   }
 
   if (action === 'activate-tab') {

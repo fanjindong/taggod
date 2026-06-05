@@ -40,6 +40,15 @@
         <button id="saveWorkspaceButton" type="button">保存工作集</button>
       </section>
 
+      <section class="settings-strip" aria-label="整理设置">
+        <label class="setting-field" for="minTabsPerGroupInput">
+          <span>分组阈值</span>
+          <input id="minTabsPerGroupInput" type="number" min="1" step="1" inputmode="numeric">
+        </label>
+        <span class="setting-unit">个标签</span>
+        <button id="saveGroupThresholdButton" class="compact-button" type="button">保存</button>
+      </section>
+
       <section id="duplicateReviewSection" class="list-section is-hidden" aria-label="重复标签确认" hidden>
         <div class="section-title">
           <h2>重复确认</h2>

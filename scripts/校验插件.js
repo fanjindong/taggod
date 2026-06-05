@@ -81,6 +81,33 @@ assert.strictEqual(backgroundSandbox.getDomainKey('不是有效网址'), '其他
 assert.strictEqual(backgroundSandbox.getHostnameKey('https://mail.google.com/inbox'), 'mail.google.com');
 assert.strictEqual(backgroundSandbox.getHostnameKey('不是有效网址'), '其他');
 
+assert.strictEqual(backgroundSandbox.normalizeSettings({}).minTabsPerGroup, 2);
+assert.strictEqual(backgroundSandbox.normalizeSettings({ minTabsPerGroup: 3 }).minTabsPerGroup, 3);
+assert.strictEqual(backgroundSandbox.normalizeSettings({ minTabsPerGroup: 0 }).minTabsPerGroup, 2);
+assert.strictEqual(backgroundSandbox.normalizeSettings({ minTabsPerGroup: 1 }).minTabsPerGroup, 1);
+assert.strictEqual(backgroundSandbox.normalizeSettings({ minTabsPerGroup: 2.5 }).minTabsPerGroup, 2);
+assert.strictEqual(backgroundSandbox.normalizeSettings({ minTabsPerGroup: '3' }).minTabsPerGroup, 2);
+assert.strictEqual(backgroundSandbox.shouldCreateNativeGroup([1, 2], { minTabsPerGroup: 2 }), true);
+assert.strictEqual(backgroundSandbox.shouldCreateNativeGroup([1, 2], { minTabsPerGroup: 3 }), false);
+assert.strictEqual(backgroundSandbox.shouldCreateNativeGroup([1], { minTabsPerGroup: 1 }), true);
+assert.strictEqual(backgroundSandbox.getShortGroupTitle('google.com'), 'google');
+assert.strictEqual(backgroundSandbox.getShortGroupTitle('example.com.cn'), 'example');
+assert.strictEqual(backgroundSandbox.getShortGroupTitle('localhost'), 'localhost');
+assert.strictEqual(backgroundSandbox.getShortGroupTitle('127.0.0.1'), '127.0.0.1');
+assert.strictEqual(backgroundSandbox.getShortGroupTitle('其他'), '其他');
+
+const conflictTitleMap = backgroundSandbox.buildGroupTitleMap(['foo.com', 'foo.net', 'google.com']);
+assert.strictEqual(conflictTitleMap.get('foo.com'), 'foo.com');
+assert.strictEqual(conflictTitleMap.get('foo.net'), 'foo.net');
+assert.strictEqual(conflictTitleMap.get('google.com'), 'google');
+
+const titledTabSnapshots = backgroundSandbox.buildTabSnapshots([
+  { id: 101, title: '邮箱', url: 'https://mail.google.com/inbox', active: false, pinned: false, index: 0 },
+  { id: 102, title: '站点一', url: 'https://foo.com', active: false, pinned: false, index: 1 },
+  { id: 103, title: '站点二', url: 'https://foo.net', active: false, pinned: false, index: 2 }
+]);
+assert.deepStrictEqual(Array.from(titledTabSnapshots, (tab) => tab.groupTitle), ['google', 'foo.com', 'foo.net']);
+
 const samePrimaryDomainUrls = [
   'https://mail.google.com/inbox',
   'https://docs.google.com/document',
@@ -156,8 +183,56 @@ const readmeContent = fs.readFileSync(path.join(rootDir, 'README.md'), 'utf8');
 assert.ok(popupHtml.includes('智能去重'));
 assert.ok(popupHtml.includes('保存工作集'));
 assert.ok(popupHtml.includes('工作集'));
+assert.ok(popupHtml.includes('minTabsPerGroupInput'));
+assert.ok(popupHtml.includes('分组阈值'));
 assert.ok(readmeContent.includes('智能去重'));
 assert.ok(readmeContent.includes('保存工作集'));
 assert.ok(readmeContent.includes('工作集'));
+assert.ok(readmeContent.includes('分组阈值'));
+assert.ok(readmeContent.includes('分组显示名'));
+assert.ok(readmeContent.includes('重新梳理当前窗口分组'));
 
-console.log('插件文件校验通过');
+async function runAsyncChecks() {
+  const groupOperations = {
+    grouped: [],
+    ungrouped: [],
+    updated: []
+  };
+
+  backgroundSandbox.queryCurrentWindowTabs = async () => [
+    { id: 21, url: 'https://mail.google.com/inbox', pinned: false, groupId: 1 },
+    { id: 22, url: 'https://docs.google.com/document', pinned: false, groupId: 1 },
+    { id: 23, url: 'https://calendar.google.com/calendar', pinned: false, groupId: 1 },
+    { id: 31, url: 'https://a.example.com', pinned: false, groupId: 2 },
+    { id: 41, url: 'https://solo.test.com', pinned: false, groupId: 3 },
+    { id: 51, url: 'https://pinned.test.com', pinned: true, groupId: 4 }
+  ];
+  backgroundSandbox.chrome.tabs = {
+    group: async ({ tabIds }) => {
+      groupOperations.grouped.push(Array.from(tabIds));
+      return groupOperations.grouped.length;
+    },
+    ungroup: async (tabIds) => {
+      groupOperations.ungrouped.push(Array.from(tabIds));
+    }
+  };
+  backgroundSandbox.chrome.tabGroups = {
+    update: async (groupId, options) => {
+      groupOperations.updated.push({ groupId, options });
+    }
+  };
+
+  await backgroundSandbox.reconcileCurrentWindowGroups({ minTabsPerGroup: 3 });
+  assert.deepStrictEqual(groupOperations.grouped, [[21, 22, 23]]);
+  assert.deepStrictEqual(groupOperations.ungrouped, [[31], [41]]);
+  assert.strictEqual(groupOperations.updated[0].options.title, 'google');
+}
+
+runAsyncChecks()
+  .then(() => {
+    console.log('插件文件校验通过');
+  })
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });

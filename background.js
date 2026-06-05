@@ -501,26 +501,37 @@ async function reconcileCurrentWindowGroups(settings) {
 }
 
 function buildGroupSummaries(tabs, settings) {
+  const normalizedSettings = normalizeSettings(settings);
   const groupMap = new Map();
   const currentGroupOrderMap = buildCurrentGroupOrderMap(tabs);
 
   tabs.forEach((tab) => {
+    if (tab.pinned || typeof tab.id !== 'number') {
+      return;
+    }
+
     const groupKey = getDomainKey(tab.url || '');
     const summary = groupMap.get(groupKey) || {
       groupKey,
       title: groupKey,
       tabCount: 0,
+      tabIds: [],
       starred: isPriorityGroup(settings, groupKey),
       currentOrder: currentGroupOrderMap.get(groupKey) ?? Number.POSITIVE_INFINITY
     };
 
     summary.tabCount += 1;
+    summary.tabIds.push(tab.id);
     groupMap.set(groupKey, summary);
   });
 
-  const titleMap = buildGroupTitleMap(Array.from(groupMap.keys()));
+  const groupSummaries = Array.from(groupMap.values()).filter((summary) => {
+    // 优先分组列表只展示真实会创建原生分组的项，避免单标签主域名出现无意义星标入口。
+    return shouldCreateNativeGroup(summary.tabIds, normalizedSettings);
+  });
+  const titleMap = buildGroupTitleMap(groupSummaries.map((summary) => summary.groupKey));
 
-  return Array.from(groupMap.values()).sort((left, right) => {
+  return groupSummaries.sort((left, right) => {
     if (left.starred !== right.starred) {
       return left.starred ? -1 : 1;
     }
@@ -530,8 +541,12 @@ function buildGroupSummaries(tabs, settings) {
     }
 
     return left.groupKey.localeCompare(right.groupKey, 'zh-CN');
-  }).map((summary) => Object.assign({}, summary, {
-    title: titleMap.get(summary.groupKey) || summary.groupKey
+  }).map((summary) => ({
+    groupKey: summary.groupKey,
+    title: titleMap.get(summary.groupKey) || summary.groupKey,
+    tabCount: summary.tabCount,
+    starred: summary.starred,
+    currentOrder: summary.currentOrder
   }));
 }
 

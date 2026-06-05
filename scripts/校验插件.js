@@ -108,6 +108,15 @@ const titledTabSnapshots = backgroundSandbox.buildTabSnapshots([
 ]);
 assert.deepStrictEqual(Array.from(titledTabSnapshots, (tab) => tab.groupTitle), ['google', 'foo.com', 'foo.net']);
 
+const visibleGroupSummaries = backgroundSandbox.buildGroupSummaries([
+  { id: 201, url: 'https://mail.google.com/inbox', pinned: false, index: 0 },
+  { id: 202, url: 'https://docs.google.com/document', pinned: false, index: 1 },
+  { id: 203, url: 'https://solo.example.com', pinned: false, index: 2 },
+  { id: 204, url: 'https://pinned.example.net', pinned: true, index: 3 }
+], { minTabsPerGroup: 2, priorityGroups: [] });
+assert.deepStrictEqual(Array.from(visibleGroupSummaries, (group) => group.groupKey), ['google.com']);
+assert.strictEqual(visibleGroupSummaries[0].title, 'google');
+
 const samePrimaryDomainUrls = [
   'https://mail.google.com/inbox',
   'https://docs.google.com/document',

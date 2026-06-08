@@ -2,7 +2,9 @@
   color-scheme: light;
   --text: #172033;
   --muted: #697386;
+  --muted-soft: #8a94a6;
   --line: #d8dee9;
+  --line-strong: #c2cad8;
   --surface: #ffffff;
   --surface-soft: #f5f7fb;
   --primary: #1f6feb;
@@ -47,7 +49,8 @@ h1 {
 .section-title span,
 .status-text,
 .tab-url,
-.session-meta {
+.session-meta,
+.helper-text {
   color: var(--muted);
 }
 
@@ -65,6 +68,31 @@ h1 {
 
 .quick-action-grid {
   grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.quick-action-area {
+  margin-top: 14px;
+}
+
+.quick-action-area .quick-action-grid {
+  margin-top: 0;
+}
+
+.action-helper-text {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  color: var(--muted-soft);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.section-helper-text {
+  margin: -2px 0 8px;
+  color: var(--muted-soft);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .settings-strip {
@@ -155,6 +183,55 @@ button:disabled {
 
 .quick-search-box {
   margin-top: 14px;
+}
+
+.helper-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.search-helper-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  color: var(--muted-soft);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.search-helper-text span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+}
+
+.hint-separator {
+  width: 3px;
+  height: 3px;
+  min-height: 3px;
+  border-radius: 999px;
+  background: var(--line-strong);
+}
+
+kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-bottom-color: var(--line-strong);
+  border-radius: 5px;
+  color: #586174;
+  background: #f8fafd;
+  box-shadow: inset 0 -1px 0 rgba(23, 32, 51, 0.05);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .search-box input {

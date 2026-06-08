@@ -17,7 +17,15 @@
 
       <label class="search-box quick-search-box">
         <span>搜索已打开标签</span>
-        <input id="searchInput" type="search" placeholder="输入标题、网址或主域名" autocomplete="off">
+        <input id="searchInput" type="search" placeholder="输入标题、网址或主域名" autocomplete="off" aria-describedby="searchShortcutHint">
+        <span id="searchShortcutHint" class="helper-text search-helper-text">
+          <span>点击打开</span>
+          <span class="hint-separator" aria-hidden="true"></span>
+          <kbd>↑↓</kbd>
+          <span>选择</span>
+          <kbd>Enter</kbd>
+          <span>跳转</span>
+        </span>
       </label>
 
       <section class="quick-status" aria-label="标签概览">
@@ -33,9 +41,17 @@
         <div id="searchResultList" class="tab-list quick-result-list"></div>
       </section>
 
-      <section class="action-grid quick-action-grid" aria-label="常用操作">
-        <button id="organizeButton" class="primary-action" type="button">整理当前窗口</button>
-        <button id="moreToolsButton" type="button" aria-expanded="false" aria-controls="moreToolsSection">更多工具</button>
+      <section class="quick-action-area" aria-label="常用操作">
+        <div class="action-grid quick-action-grid">
+          <button id="organizeButton" class="primary-action" type="button">整理当前窗口</button>
+          <button id="moreToolsButton" type="button" aria-expanded="false" aria-controls="moreToolsSection">更多工具</button>
+        </div>
+        <p class="helper-text action-helper-text">
+          <span>默认快捷键</span>
+          <kbd>⌘⇧Y</kbd>
+          <span>/</span>
+          <kbd>Ctrl Shift Y</kbd>
+        </p>
       </section>
 
       <section id="moreToolsSection" class="more-tools-section is-hidden" aria-label="更多工具" hidden>
@@ -64,6 +80,7 @@
           <div class="section-title">
             <h2>管理操作</h2>
           </div>
+          <p class="helper-text section-helper-text">智能去重会先确认，不会直接关闭。</p>
           <div class="tool-button-grid">
             <button id="scanDuplicatesButton" type="button">智能去重</button>
             <button id="saveWorkspaceButton" type="button">保存工作集</button>

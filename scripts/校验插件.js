@@ -402,6 +402,15 @@ assert.ok(popupHtml.includes('searchResultList'));
 assert.ok(popupHtml.includes('moreToolsButton'));
 assert.ok(popupHtml.includes('moreToolsSection'));
 assert.ok(popupHtml.includes('打开后默认展示最近使用页面'));
+assert.ok(popupHtml.includes('点击打开'));
+assert.ok(popupHtml.includes('↑↓'));
+assert.ok(popupHtml.includes('选择'));
+assert.ok(popupHtml.includes('Enter'));
+assert.ok(popupHtml.includes('跳转'));
+assert.ok(popupHtml.includes('默认快捷键'));
+assert.ok(popupHtml.includes('⌘⇧Y'));
+assert.ok(popupHtml.includes('Ctrl Shift Y'));
+assert.ok(popupHtml.includes('不会直接关闭'));
 assert.ok(readmeContent.includes('智能去重'));
 assert.ok(readmeContent.includes('保存工作集'));
 assert.ok(readmeContent.includes('工作集'));
@@ -411,6 +420,8 @@ assert.ok(readmeContent.includes('重新梳理当前窗口分组'));
 assert.ok(readmeContent.includes('快速切换'));
 assert.ok(readmeContent.includes('跨窗口最近使用页面'));
 assert.ok(readmeContent.includes('点击任意结果项'));
+assert.ok(readmeContent.includes('弹窗搜索框下方会用轻量键位提示'));
+assert.ok(readmeContent.includes('整理按钮下方会用轻量键位样式提示默认整理快捷键'));
 
 async function runAsyncChecks() {
   const groupOperations = {

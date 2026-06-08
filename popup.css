@@ -78,14 +78,26 @@ h1 {
   margin-top: 0;
 }
 
+.popup-shortcut-helper,
 .action-helper-text {
   display: flex;
   align-items: center;
   gap: 5px;
-  margin-top: 6px;
   color: var(--muted-soft);
   font-size: 11px;
   line-height: 1.2;
+}
+
+.popup-shortcut-helper {
+  margin-top: 5px;
+}
+
+.popup-header .popup-shortcut-helper {
+  color: var(--muted-soft);
+}
+
+.action-helper-text {
+  margin-top: 6px;
 }
 
 .section-helper-text {
@@ -189,6 +201,13 @@ button:disabled {
   margin: 0;
   font-size: 12px;
   line-height: 1.45;
+}
+
+.popup-shortcut-helper,
+.action-helper-text,
+.section-helper-text {
+  color: var(--muted-soft);
+  font-size: 11px;
 }
 
 .search-helper-text {
@@ -299,7 +318,8 @@ kbd {
 }
 
 .quick-result-list {
-  max-height: 340px;
+  /* 弹窗高度有限，结果列表需要给底部整理入口留出首屏空间。 */
+  max-height: 240px;
 }
 
 .quick-result-item {

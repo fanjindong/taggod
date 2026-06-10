@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "标签之神",
-  "description": "一键整理、搜索、去重和保存上百个 Chrome 标签页。",
+  "description": "一键整理、分组、去重和保存上百个 Chrome 标签页。",
   "version": "0.1.6",
   "icons": {
     "16": "assets/icons/icon-16.png",

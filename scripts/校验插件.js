@@ -42,6 +42,9 @@ if (!manifest.icons || !manifest.action || !manifest.action.default_icon) {
   throw new Error('manifest.json 必须声明插件图标');
 }
 
+assert.ok(manifest.description.includes('一键整理'));
+assert.ok(!manifest.description.includes('搜索'));
+
 for (const scriptFile of ['background.js', 'popup.js']) {
   const scriptPath = path.join(rootDir, scriptFile);
   const scriptContent = fs.readFileSync(scriptPath, 'utf8');
@@ -115,65 +118,9 @@ const titledTabSnapshots = backgroundSandbox.buildTabSnapshots([
   { id: 103, title: '站点二', url: 'https://foo.net', active: false, pinned: false, index: 2 }
 ]);
 assert.deepStrictEqual(Array.from(titledTabSnapshots, (tab) => tab.groupTitle), ['google', 'foo.com', 'foo.net']);
-
-const windowOrderMap = backgroundSandbox.buildWindowOrderMap([
-  { id: 1, windowId: 20 },
-  { id: 2, windowId: 10 },
-  { id: 3, windowId: 30 },
-  { id: 4, windowId: 20 }
-], 20);
-assert.strictEqual(windowOrderMap.get(20), 1);
-assert.strictEqual(windowOrderMap.get(10), 2);
-assert.strictEqual(windowOrderMap.get(30), 3);
-assert.strictEqual(backgroundSandbox.getWindowLabel(20, 20, windowOrderMap), '当前窗口');
-assert.strictEqual(backgroundSandbox.getWindowLabel(10, 20, windowOrderMap), '其他窗口');
-assert.strictEqual(backgroundSandbox.getWindowLabel(999, 20, windowOrderMap), '其他窗口');
-
-const searchSnapshots = backgroundSandbox.buildSearchTabSnapshots([
-  {
-    id: 101,
-    title: '飞书需求文档',
-    url: 'https://docs.example.com/a',
-    active: false,
-    pinned: false,
-    index: 2,
-    windowId: 20,
-    lastAccessed: 1780645200000
-  },
-  {
-    id: 102,
-    title: 'GitHub PR',
-    url: 'https://github.com/example/repo/pull/1',
-    active: true,
-    pinned: false,
-    index: 1,
-    windowId: 10
-  }
-], {
-  currentWindowId: 20,
-  recentAccessMap: {
-    102: 1780645300000
-  }
-});
-assert.strictEqual(searchSnapshots[0].groupKey, 'example.com');
-assert.strictEqual(searchSnapshots[0].groupTitle, 'example');
-assert.strictEqual(searchSnapshots[0].isCurrentWindow, true);
-assert.strictEqual(searchSnapshots[0].windowLabel, '当前窗口');
-assert.strictEqual(searchSnapshots[0].lastAccessedAt, 1780645200000);
-assert.strictEqual(searchSnapshots[1].groupKey, 'github.com');
-assert.strictEqual(searchSnapshots[1].groupTitle, 'github');
-assert.strictEqual(searchSnapshots[1].isCurrentWindow, false);
-assert.strictEqual(searchSnapshots[1].windowLabel, '其他窗口');
-assert.strictEqual(searchSnapshots[1].lastAccessedAt, 1780645300000);
-
-const normalizedRecentAccess = backgroundSandbox.normalizeRecentAccessMap({
-  101: 1780645000000,
-  102: '不是时间',
-  abc: 1780645100000
-});
-assert.deepStrictEqual(JSON.parse(JSON.stringify(normalizedRecentAccess)), {
-  101: 1780645000000
-});
+assert.strictEqual(backgroundSandbox.buildSearchTabSnapshots, undefined);
+assert.strictEqual(backgroundSandbox.normalizeRecentAccessMap, undefined);
+assert.strictEqual(backgroundSandbox.activateTabAcrossWindows, undefined);
 
 const visibleGroupSummaries = backgroundSandbox.buildGroupSummaries([
   { id: 201, url: 'https://mail.google.com/inbox', pinned: false, index: 0 },
@@ -343,67 +290,12 @@ const popupSandbox = {
 vm.createContext(popupSandbox);
 vm.runInContext(fs.readFileSync(popupPath, 'utf8'), popupSandbox, { filename: 'popup.js' });
 
-const rankedRecentTabs = popupSandbox.getVisibleTabsFromState({
-  query: '',
-  tabs: [
-    { id: 1, title: '旧页面', url: 'https://old.example.com', groupKey: 'example.com', groupTitle: 'example', index: 0, isCurrentWindow: true, lastAccessedAt: 10 },
-    { id: 2, title: '新页面', url: 'https://new.example.com', groupKey: 'example.com', groupTitle: 'example', index: 1, isCurrentWindow: false, lastAccessedAt: 30 },
-    { id: 3, title: '无时间页面', url: 'https://none.example.com', groupKey: 'example.com', groupTitle: 'example', index: 2, isCurrentWindow: true, lastAccessedAt: 0 },
-    { id: 4, title: '当前页面', url: 'https://current.example.com', groupKey: 'example.com', groupTitle: 'example', active: true, index: 3, isCurrentWindow: true, lastAccessedAt: 100 }
-  ]
-});
-assert.deepStrictEqual(Array.from(rankedRecentTabs, (tab) => tab.id), [2, 1, 3]);
-
-const manyRecentTabs = Array.from({ length: 35 }, (_, index) => ({
-  id: index + 100,
-  title: `最近页面 ${index}`,
-  url: `https://example.com/${index}`,
-  groupKey: 'example.com',
-  groupTitle: 'example',
-  index,
-  isCurrentWindow: false,
-  lastAccessedAt: 1000 - index
-}));
-assert.strictEqual(popupSandbox.getVisibleTabsFromState({
-  query: '',
-  tabs: manyRecentTabs
-}).length, 30);
-
-const rankedSearchTabs = popupSandbox.getVisibleTabsFromState({
-  query: 'github',
-  tabs: [
-    { id: 10, title: '普通文章', url: 'https://example.com/github-guide', groupKey: 'example.com', groupTitle: 'example', index: 0, isCurrentWindow: true, lastAccessedAt: 100 },
-    { id: 11, title: 'GitHub PR', url: 'https://github.com/acme/repo/pull/1', groupKey: 'github.com', groupTitle: 'github', index: 1, isCurrentWindow: false, lastAccessedAt: 50 },
-    { id: 12, title: 'GitHub 首页', url: 'https://github.com', groupKey: 'github.com', groupTitle: 'github', index: 2, isCurrentWindow: true, lastAccessedAt: 30 },
-    { id: 13, title: 'GitHub 当前页', url: 'https://github.com/current', groupKey: 'github.com', groupTitle: 'github', active: true, index: 3, isCurrentWindow: true, lastAccessedAt: 200 }
-  ]
-});
-assert.deepStrictEqual(Array.from(rankedSearchTabs, (tab) => tab.id), [13, 11, 12, 10]);
-
-assert.strictEqual(popupSandbox.clampSelectedIndex(-1, 3), 2);
-assert.strictEqual(popupSandbox.clampSelectedIndex(3, 3), 0);
-assert.strictEqual(popupSandbox.clampSelectedIndex(1, 3), 1);
-assert.strictEqual(popupSandbox.clampSelectedIndex(0, 0), -1);
-assert.strictEqual(popupSandbox.formatRecentAccessTime(20000000, 20000000), '刚刚');
-assert.strictEqual(popupSandbox.formatRecentAccessTime(20000000 - 2 * 60 * 1000, 20000000), '2 分钟前');
-assert.strictEqual(popupSandbox.formatRecentAccessTime(20000000 - 3 * 60 * 60 * 1000, 20000000), '3 小时前');
-assert.strictEqual(popupSandbox.formatRecentAccessTime(0, 20000000), '');
-let selectedScrollOptions = null;
-popupSandbox.keepSelectedResultVisible({
-  querySelector(selector) {
-    assert.strictEqual(selector, '.quick-result-item.is-selected');
-
-    return {
-      scrollIntoView(options) {
-        selectedScrollOptions = options;
-      }
-    };
-  }
-});
-assert.strictEqual(selectedScrollOptions.block, 'nearest');
+assert.strictEqual(popupSandbox.getVisibleTabsFromState, undefined);
+assert.strictEqual(popupSandbox.formatRecentAccessTime, undefined);
 
 const popupHtml = fs.readFileSync(path.join(rootDir, 'popup.html'), 'utf8');
 const readmeContent = fs.readFileSync(path.join(rootDir, 'README.md'), 'utf8');
+const usageSvgContent = fs.readFileSync(path.join(rootDir, 'assets/插件使用页面标注.svg'), 'utf8');
 
 // 弹窗和说明文档必须同时展示核心中文文案，避免功能已实现但入口或文档仍停留在旧“会话”命名。
 assert.ok(popupHtml.includes('智能去重'));
@@ -411,28 +303,33 @@ assert.ok(popupHtml.includes('保存工作集'));
 assert.ok(popupHtml.includes('工作集'));
 assert.ok(popupHtml.includes('minTabsPerGroupInput'));
 assert.ok(popupHtml.includes('分组阈值'));
-assert.ok(popupHtml.includes('快速切换'));
-assert.ok(popupHtml.includes('searchResultList'));
+assert.ok(popupHtml.includes('一键整理'));
+assert.ok(popupHtml.includes('把当前窗口整理成清晰分组'));
 assert.ok(popupHtml.includes('moreToolsButton'));
 assert.ok(popupHtml.includes('moreToolsSection'));
-assert.ok(popupHtml.includes('打开后默认展示最近使用页面'));
 assert.ok(popupHtml.includes('打开弹窗'));
 assert.ok(popupHtml.includes('⌘⇧L'));
 assert.ok(popupHtml.includes('Ctrl Shift L'));
-assert.ok(popupHtml.includes('点击打开'));
-assert.ok(popupHtml.includes('↑↓'));
-assert.ok(popupHtml.includes('选择'));
-assert.ok(popupHtml.includes('Enter'));
-assert.ok(popupHtml.includes('跳转'));
 assert.ok(popupHtml.includes('默认快捷键'));
 assert.ok(popupHtml.includes('⌘⇧Y'));
 assert.ok(popupHtml.includes('Ctrl Shift Y'));
 assert.ok(popupHtml.includes('不会直接关闭'));
+assert.ok(!popupHtml.includes('searchInput'));
+assert.ok(!popupHtml.includes('searchResultList'));
+assert.ok(!popupHtml.includes('搜索已打开标签'));
+assert.ok(!popupHtml.includes('快速切换'));
+assert.ok(!popupHtml.includes('最近使用'));
 assert.ok(readmeContent.includes('一键理顺满屏标签'));
-assert.ok(readmeContent.includes('快速找回想看的页面'));
+assert.ok(readmeContent.includes('分组规则是插件的核心能力'));
 assert.ok(readmeContent.includes('点击“整理当前窗口”'));
-assert.ok(readmeContent.includes('搜索框会自动聚焦'));
-assert.ok(readmeContent.includes('最近使用页面'));
+assert.ok(!readmeContent.includes('快速找回想看的页面'));
+assert.ok(!readmeContent.includes('搜索框会自动聚焦'));
+assert.ok(!readmeContent.includes('最近使用页面'));
+assert.ok(usageSvgContent.includes('一键整理当前窗口'));
+assert.ok(usageSvgContent.includes('整理规则可配置'));
+assert.ok(!usageSvgContent.includes('搜索已打开标签'));
+assert.ok(!usageSvgContent.includes('快速切换'));
+assert.ok(!usageSvgContent.includes('最近使用页面'));
 
 async function runAsyncChecks() {
   const groupOperations = {
@@ -468,35 +365,6 @@ async function runAsyncChecks() {
   assert.deepStrictEqual(groupOperations.grouped, [[21, 22, 23]]);
   assert.deepStrictEqual(groupOperations.ungrouped, [[31], [41]]);
   assert.strictEqual(groupOperations.updated[0].options.title, 'google');
-
-  const activationOperations = {
-    focusedWindowIds: [],
-    activatedTabIds: []
-  };
-
-  backgroundSandbox.chrome.tabs.get = async (tabId) => {
-    assert.strictEqual(tabId, 88);
-    return {
-      id: 88,
-      windowId: 66
-    };
-  };
-  backgroundSandbox.chrome.windows = {
-    update: async (windowId, updateInfo) => {
-      activationOperations.focusedWindowIds.push(windowId);
-      assert.strictEqual(updateInfo.focused, true);
-    }
-  };
-  backgroundSandbox.chrome.tabs.update = async (tabId, updateInfo) => {
-    activationOperations.activatedTabIds.push(tabId);
-    assert.strictEqual(updateInfo.active, true);
-  };
-
-  const activationResult = await backgroundSandbox.activateTabAcrossWindows(88);
-  assert.deepStrictEqual(activationOperations.focusedWindowIds, [66]);
-  assert.deepStrictEqual(activationOperations.activatedTabIds, [88]);
-  assert.strictEqual(activationResult.activated, true);
-  assert.strictEqual(activationResult.windowId, 66);
 }
 
 runAsyncChecks()

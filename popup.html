@@ -10,8 +10,8 @@
     <main class="popup-shell">
       <header class="popup-header">
         <div>
-          <h1>快速切换</h1>
-          <p id="summaryText">打开后默认展示最近使用页面</p>
+          <h1>一键整理</h1>
+          <p id="summaryText">把当前窗口整理成清晰分组</p>
           <p class="helper-text popup-shortcut-helper">
             <span>打开弹窗</span>
             <kbd>⌘⇧L</kbd>
@@ -21,30 +21,9 @@
         </div>
       </header>
 
-      <label class="search-box quick-search-box">
-        <span>搜索已打开标签</span>
-        <input id="searchInput" type="search" placeholder="输入标题、网址或主域名" autocomplete="off" aria-describedby="searchShortcutHint">
-        <span id="searchShortcutHint" class="helper-text search-helper-text">
-          <span>点击打开</span>
-          <span class="hint-separator" aria-hidden="true"></span>
-          <kbd>↑↓</kbd>
-          <span>选择</span>
-          <kbd>Enter</kbd>
-          <span>跳转</span>
-        </span>
-      </label>
-
       <section class="quick-status" aria-label="标签概览">
         <span id="quickStatusText">正在读取标签页</span>
         <span id="duplicateHintText"></span>
-      </section>
-
-      <section class="list-section quick-results-section" aria-label="快速切换结果">
-        <div class="section-title">
-          <h2 id="resultTitle">最近使用</h2>
-          <span id="visibleCount">0 个结果</span>
-        </div>
-        <div id="searchResultList" class="tab-list quick-result-list"></div>
       </section>
 
       <section class="quick-action-area" aria-label="常用操作">

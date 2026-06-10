@@ -1,5 +1,4 @@
 const state = {
-  tabs: [],
   groups: [],
   sessions: [],
   settings: {
@@ -20,13 +19,8 @@ const state = {
   },
   // 保存后只记录本次标签编号，用户明确点击后才关闭，避免保存动作变成隐式清场。
   lastSavedTabIds: [],
-  query: '',
-  selectedIndex: 0,
   moreToolsVisible: false
 };
-
-// 默认态只渲染最近 30 条，原因是首开弹窗要快；更多页面可通过搜索直接定位。
-const DEFAULT_RECENT_RESULT_LIMIT = 30;
 
 function sendMessage(action, payload = {}) {
   return chrome.runtime.sendMessage(Object.assign({ action }, payload)).then((response) => {
@@ -48,18 +42,16 @@ async function loadState(options = {}) {
 
   try {
     const data = await sendMessage('get-state');
-    state.tabs = data.tabs || [];
     state.groups = data.groups || [];
     state.sessions = data.sessions || [];
     state.settings = data.settings || state.settings;
     state.overview = data.overview || state.overview;
-    state.selectedIndex = clampSelectedIndex(state.selectedIndex, getVisibleTabsFromState(state).length);
     render();
 
     if (options.keepMoreToolsFocus) {
       focusMoreTools();
     } else {
-      focusSearchInput();
+      focusPrimaryAction();
     }
 
     if (!options.keepStatus) {
@@ -84,7 +76,7 @@ async function loadDuplicateOverview() {
     });
     renderOverview();
   } catch (error) {
-    // 重复数量只用于轻提示，失败不应该影响快速切换主路径。
+    // 重复数量只用于轻提示，失败不应该影响一键整理主路径。
     document.getElementById('duplicateHintText').textContent = '';
   }
 }
@@ -101,12 +93,6 @@ function bindEvents() {
     state.duplicateReview.selectedGroupKeys = [];
     renderDuplicateReview();
   });
-  document.getElementById('searchInput').addEventListener('input', (event) => {
-    state.query = event.target.value.trim().toLowerCase();
-    state.selectedIndex = 0;
-    renderTabs();
-  });
-  document.getElementById('searchInput').addEventListener('keydown', handleSearchKeydown);
   document.getElementById('moreToolsButton').addEventListener('click', toggleMoreTools);
 }
 
@@ -180,45 +166,6 @@ async function closeSelectedDuplicates() {
   }
 }
 
-async function activateSearchResult(tabId) {
-  if (!Number.isInteger(tabId)) {
-    setStatus('目标标签无效');
-    return;
-  }
-
-  await runAction('activate-tab', { tabId });
-}
-
-function handleSearchKeydown(event) {
-  const visibleTabs = getVisibleTabs();
-
-  if (event.key === 'ArrowDown') {
-    event.preventDefault();
-    state.selectedIndex = clampSelectedIndex(state.selectedIndex + 1, visibleTabs.length);
-    renderTabs();
-    return;
-  }
-
-  if (event.key === 'ArrowUp') {
-    event.preventDefault();
-    state.selectedIndex = clampSelectedIndex(state.selectedIndex - 1, visibleTabs.length);
-    renderTabs();
-    return;
-  }
-
-  if (event.key === 'Enter') {
-    event.preventDefault();
-    const selectedTab = visibleTabs[clampSelectedIndex(state.selectedIndex, visibleTabs.length)];
-
-    if (!selectedTab) {
-      setStatus('没有可切换的标签页');
-      return;
-    }
-
-    activateSearchResult(selectedTab.id);
-  }
-}
-
 function toggleMoreTools() {
   state.moreToolsVisible = !state.moreToolsVisible;
   renderMoreTools();
@@ -244,7 +191,7 @@ function focusMoreTools() {
   const button = document.getElementById('moreToolsButton');
 
   if (typeof button.focus === 'function') {
-    // 更多工具内操作刷新后保留焦点，避免用户刚完成动作就被带回顶部搜索框。
+    // 更多工具内操作刷新后保留焦点，避免用户刚完成动作就被带回顶部主入口。
     button.focus();
   }
 
@@ -347,17 +294,16 @@ function render() {
   renderOverview();
   renderGroups();
   renderDuplicateReview();
-  renderTabs();
   renderSessions();
   renderMoreTools();
 }
 
-function focusSearchInput() {
-  const searchInput = document.getElementById('searchInput');
+function focusPrimaryAction() {
+  const organizeButton = document.getElementById('organizeButton');
 
-  if (searchInput && typeof searchInput.focus === 'function') {
-    // 弹窗打开后的主任务是找标签，自动聚焦可以减少一次无意义点击。
-    searchInput.focus();
+  if (organizeButton && typeof organizeButton.focus === 'function') {
+    // 弹窗打开的主任务就是整理当前窗口，焦点放在主按钮能减少一次点击。
+    organizeButton.focus();
   }
 }
 
@@ -366,13 +312,13 @@ function renderSettings() {
 }
 
 function renderOverview() {
-  const allTabCount = state.overview.allTabCount || state.overview.tabCount;
-  const windowCount = state.overview.windowCount || 1;
+  const tabCount = state.overview.tabCount || 0;
+  const domainCount = state.overview.domainCount || 0;
   const duplicateCount = state.overview.duplicateCount;
 
-  document.getElementById('quickStatusText').textContent = `${allTabCount} 个标签 · ${windowCount} 个窗口`;
+  document.getElementById('quickStatusText').textContent = `${tabCount} 个标签 · ${domainCount} 个主域名`;
   document.getElementById('duplicateHintText').textContent = Number.isFinite(duplicateCount) && duplicateCount > 0 ? `${duplicateCount} 个重复` : '';
-  document.getElementById('summaryText').textContent = state.query ? '搜索所有已打开标签' : '最近使用页面';
+  document.getElementById('summaryText').textContent = '把当前窗口整理成清晰分组';
 }
 
 function renderGroups() {
@@ -460,53 +406,6 @@ function renderDuplicateReview() {
       }
     });
   });
-}
-
-function renderTabs() {
-  const tabList = document.getElementById('searchResultList');
-  const visibleTabs = getVisibleTabs();
-  const selectedIndex = clampSelectedIndex(state.selectedIndex, visibleTabs.length);
-  state.selectedIndex = selectedIndex;
-  document.getElementById('visibleCount').textContent = `${visibleTabs.length} 个结果`;
-  document.getElementById('resultTitle').textContent = state.query ? '搜索结果' : '最近使用';
-  tabList.innerHTML = '';
-
-  if (visibleTabs.length === 0) {
-    tabList.appendChild(createEmptyState(state.query ? '没有匹配的已打开标签页' : '当前没有可切换的标签页'));
-    return;
-  }
-
-  visibleTabs.forEach((tab, index) => {
-    const item = document.createElement('button');
-    item.className = `tab-item quick-result-item${index === selectedIndex ? ' is-selected' : ''}`;
-    item.type = 'button';
-    item.dataset.action = 'activate';
-    item.dataset.tabId = String(tab.id);
-    const groupTitle = tab.groupTitle || tab.groupKey;
-    const windowLabel = tab.windowLabel || (tab.isCurrentWindow ? '当前窗口' : '其他窗口');
-    const accessLabel = formatRecentAccessTime(Number(tab.lastAccessedAt) || 0);
-    const metaText = accessLabel ? `${windowLabel} · ${accessLabel}` : windowLabel;
-    item.innerHTML = `
-      <span class="quick-result-main">
-        <span class="tab-title" title="${escapeHtml(tab.title)}">${escapeHtml(tab.title)}</span>
-        <span class="tab-url" title="${escapeHtml(tab.groupKey)} · ${escapeHtml(tab.url)}">${escapeHtml(groupTitle)} · ${escapeHtml(tab.url)}</span>
-      </span>
-      <span class="quick-result-meta">${escapeHtml(metaText)}</span>
-    `;
-    item.addEventListener('click', () => activateSearchResult(tab.id));
-    tabList.appendChild(item);
-  });
-
-  keepSelectedResultVisible(tabList);
-}
-
-function keepSelectedResultVisible(tabList) {
-  const selectedItem = tabList.querySelector('.quick-result-item.is-selected');
-
-  if (selectedItem && typeof selectedItem.scrollIntoView === 'function') {
-    // 键盘上下选择时列表本身不会自动滚动，这里只把高亮项滚进可视区域。
-    selectedItem.scrollIntoView({ block: 'nearest' });
-  }
 }
 
 function renderSessions() {
@@ -605,149 +504,6 @@ function formatTimestamp(timestamp) {
   }).format(new Date(timestamp));
 }
 
-function formatRecentAccessTime(timestamp, now = Date.now()) {
-  if (!Number.isFinite(timestamp) || timestamp <= 0) {
-    return '';
-  }
-
-  const elapsedMs = Math.max(0, now - timestamp);
-  // 这里用固定分钟换算，原因是最近使用只需要粗粒度提示，不需要精确到秒。
-  const minuteMs = 60 * 1000;
-
-  if (elapsedMs < minuteMs) {
-    return '刚刚';
-  }
-
-  const minutes = Math.floor(elapsedMs / minuteMs);
-
-  if (minutes < 60) {
-    return `${minutes} 分钟前`;
-  }
-
-  const hours = Math.floor(minutes / 60);
-
-  if (hours < 24) {
-    return `${hours} 小时前`;
-  }
-
-  return '更早';
-}
-
-function normalizeSearchText(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
-function getTabSearchText(tab) {
-  return [
-    tab.title,
-    tab.url,
-    tab.groupKey,
-    tab.groupTitle
-  ].map(normalizeSearchText).join(' ');
-}
-
-function getSearchMatchScore(tab, query) {
-  const normalizedQuery = normalizeSearchText(query);
-
-  if (!normalizedQuery) {
-    return 0;
-  }
-
-  const title = normalizeSearchText(tab.title);
-  const groupKey = normalizeSearchText(tab.groupKey);
-  const groupTitle = normalizeSearchText(tab.groupTitle);
-  const url = normalizeSearchText(tab.url);
-
-  if (title === normalizedQuery) {
-    return 400;
-  }
-
-  if (title.includes(normalizedQuery)) {
-    return 300;
-  }
-
-  if (groupTitle.includes(normalizedQuery) || groupKey.includes(normalizedQuery)) {
-    return 220;
-  }
-
-  if (url.includes(normalizedQuery)) {
-    return 100;
-  }
-
-  return 0;
-}
-
-function compareRecentTabs(left, right) {
-  const leftAccessedAt = Number(left.lastAccessedAt) || 0;
-  const rightAccessedAt = Number(right.lastAccessedAt) || 0;
-
-  if (leftAccessedAt !== rightAccessedAt) {
-    return rightAccessedAt - leftAccessedAt;
-  }
-
-  if (left.isCurrentWindow !== right.isCurrentWindow) {
-    return left.isCurrentWindow ? -1 : 1;
-  }
-
-  return (left.index || 0) - (right.index || 0);
-}
-
-function compareSearchTabs(left, right, query) {
-  const leftScore = getSearchMatchScore(left, query);
-  const rightScore = getSearchMatchScore(right, query);
-
-  if (leftScore !== rightScore) {
-    return rightScore - leftScore;
-  }
-
-  const recentCompare = compareRecentTabs(left, right);
-
-  if (recentCompare !== 0) {
-    return recentCompare;
-  }
-
-  return (left.id || 0) - (right.id || 0);
-}
-
-function getVisibleTabsFromState(sourceState) {
-  const query = normalizeSearchText(sourceState.query);
-  const tabs = Array.isArray(sourceState.tabs) ? sourceState.tabs : [];
-
-  if (!query) {
-    return tabs
-      .filter((tab) => {
-        // 最近使用列表用于“切回别的页面”，当前窗口的当前标签继续展示会浪费首屏位置。
-        return !(tab.active && tab.isCurrentWindow);
-      })
-      .sort(compareRecentTabs)
-      .slice(0, DEFAULT_RECENT_RESULT_LIMIT);
-  }
-
-  return tabs
-    .filter((tab) => getSearchMatchScore(tab, query) > 0 || getTabSearchText(tab).includes(query))
-    .sort((left, right) => compareSearchTabs(left, right, query));
-}
-
-function clampSelectedIndex(index, total) {
-  if (total <= 0) {
-    return -1;
-  }
-
-  if (index < 0) {
-    return total - 1;
-  }
-
-  if (index >= total) {
-    return 0;
-  }
-
-  return index;
-}
-
-function getVisibleTabs() {
-  return getVisibleTabsFromState(state);
-}
-
 function createEmptyState(text) {
   const element = document.createElement('div');
   element.className = 'empty-state';
@@ -796,14 +552,6 @@ function formatActionResult(action, result) {
 
   if (action === 'toggle-priority-group') {
     return result.starred ? `已将 ${result.groupKey} 设为优先分组` : `已取消 ${result.groupKey} 的优先分组`;
-  }
-
-  if (action === 'activate-tab') {
-    return '已切换到目标标签';
-  }
-
-  if (action === 'close-tab') {
-    return '已关闭标签';
   }
 
   return '操作已完成';

@@ -365,6 +365,78 @@ function buildCurrentGroupOrderMap(tabs) {
   return orderMap;
 }
 
+function buildGroupableDomainSet(tabs, settings) {
+  const normalizedSettings = normalizeSettings(settings);
+  const domainTabIds = new Map();
+
+  (Array.isArray(tabs) ? tabs : []).forEach((tab) => {
+    if (tab.pinned || typeof tab.id !== 'number') {
+      return;
+    }
+
+    const groupKey = getDomainKey(tab.url || '');
+    const tabIds = domainTabIds.get(groupKey) || [];
+    tabIds.push(tab.id);
+    domainTabIds.set(groupKey, tabIds);
+  });
+
+  return new Set(Array.from(domainTabIds.entries())
+    .filter(([, tabIds]) => {
+      // 排序阶段必须复用真实建组阈值，否则单标签主域名会被当成分组插到原生分组之前。
+      return shouldCreateNativeGroup(tabIds, normalizedSettings);
+    })
+    .map(([groupKey]) => groupKey));
+}
+
+function buildOrganizedTabs(tabs, settings) {
+  const safeTabs = Array.isArray(tabs) ? tabs : [];
+  const normalizedSettings = normalizeSettings(settings);
+  const currentGroupOrderMap = buildCurrentGroupOrderMap(safeTabs);
+  const groupableDomainSet = buildGroupableDomainSet(safeTabs, normalizedSettings);
+
+  return [...safeTabs].sort((left, right) => {
+    if (left.pinned !== right.pinned) {
+      return left.pinned ? -1 : 1;
+    }
+
+    const leftDomain = getDomainKey(left.url || '');
+    const rightDomain = getDomainKey(right.url || '');
+    const leftIsGroupable = groupableDomainSet.has(leftDomain);
+    const rightIsGroupable = groupableDomainSet.has(rightDomain);
+
+    if (leftIsGroupable !== rightIsGroupable) {
+      // 只有达到阈值的主域名才会形成 Chrome 原生分组，必须整体排在零散单标签前面。
+      return leftIsGroupable ? -1 : 1;
+    }
+
+    const leftIsPriority = leftIsGroupable && isPriorityGroup(normalizedSettings, leftDomain);
+    const rightIsPriority = rightIsGroupable && isPriorityGroup(normalizedSettings, rightDomain);
+
+    if (leftIsPriority !== rightIsPriority) {
+      return leftIsPriority ? -1 : 1;
+    }
+
+    const leftCurrentRank = currentGroupOrderMap.get(leftDomain) ?? Number.POSITIVE_INFINITY;
+    const rightCurrentRank = currentGroupOrderMap.get(rightDomain) ?? Number.POSITIVE_INFINITY;
+
+    if (leftCurrentRank !== rightCurrentRank) {
+      return leftCurrentRank - rightCurrentRank;
+    }
+
+    const domainCompare = leftDomain.localeCompare(rightDomain, 'zh-CN');
+
+    if (domainCompare !== 0) {
+      return domainCompare;
+    }
+
+    const leftHostname = getHostnameKey(left.url || '');
+    const rightHostname = getHostnameKey(right.url || '');
+    const hostnameCompare = leftHostname.localeCompare(rightHostname, 'zh-CN');
+
+    return hostnameCompare === 0 ? left.index - right.index : hostnameCompare;
+  });
+}
+
 async function queryCurrentWindowTabs() {
   return chrome.tabs.query({ currentWindow: true });
 }
@@ -528,45 +600,12 @@ async function organizeTabs() {
   const tabs = await queryCurrentWindowTabs();
   const stored = await chrome.storage.local.get([STORAGE_KEYS.settings]);
   const settings = normalizeSettings(stored[STORAGE_KEYS.settings]);
-  const currentGroupOrderMap = buildCurrentGroupOrderMap(tabs);
 
   if (tabs.length === 0) {
     return { organizedCount: 0, groupCount: 0 };
   }
 
-  const sortedTabs = [...tabs].sort((left, right) => {
-    if (left.pinned !== right.pinned) {
-      return left.pinned ? -1 : 1;
-    }
-
-    const leftDomain = getDomainKey(left.url || '');
-    const rightDomain = getDomainKey(right.url || '');
-    const leftIsPriority = isPriorityGroup(settings, leftDomain);
-    const rightIsPriority = isPriorityGroup(settings, rightDomain);
-
-    if (leftIsPriority !== rightIsPriority) {
-      return leftIsPriority ? -1 : 1;
-    }
-
-    const leftCurrentRank = currentGroupOrderMap.get(leftDomain) ?? Number.POSITIVE_INFINITY;
-    const rightCurrentRank = currentGroupOrderMap.get(rightDomain) ?? Number.POSITIVE_INFINITY;
-
-    if (leftCurrentRank !== rightCurrentRank) {
-      return leftCurrentRank - rightCurrentRank;
-    }
-
-    const domainCompare = leftDomain.localeCompare(rightDomain, 'zh-CN');
-
-    if (domainCompare !== 0) {
-      return domainCompare;
-    }
-
-    const leftHostname = getHostnameKey(left.url || '');
-    const rightHostname = getHostnameKey(right.url || '');
-    const hostnameCompare = leftHostname.localeCompare(rightHostname, 'zh-CN');
-
-    return hostnameCompare === 0 ? left.index - right.index : hostnameCompare;
-  });
+  const sortedTabs = buildOrganizedTabs(tabs, settings);
 
   for (let index = 0; index < sortedTabs.length; index += 1) {
     const tab = sortedTabs[index];

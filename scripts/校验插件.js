@@ -184,6 +184,20 @@ const visibleGroupSummaries = backgroundSandbox.buildGroupSummaries([
 assert.deepStrictEqual(Array.from(visibleGroupSummaries, (group) => group.groupKey), ['google.com']);
 assert.strictEqual(visibleGroupSummaries[0].title, 'google');
 
+const organizedTabsWithSoloFirst = backgroundSandbox.buildOrganizedTabs([
+  { id: 301, url: 'https://solo.example.com', pinned: false, index: 0 },
+  { id: 302, url: 'https://mail.google.com/inbox', pinned: false, index: 1 },
+  { id: 303, url: 'https://docs.google.com/document', pinned: false, index: 2 },
+  { id: 304, url: 'https://github.com/example/repo', pinned: false, index: 3 },
+  { id: 305, url: 'https://github.com/example/repo/issues', pinned: false, index: 4 },
+  { id: 306, url: 'https://fixed.example.com', pinned: true, index: 5 }
+], {
+  minTabsPerGroup: 2,
+  // 历史配置里可能残留单标签星标，排序仍应以真实会创建原生分组的主域名优先。
+  priorityGroups: [{ groupKey: 'example.com' }]
+});
+assert.deepStrictEqual(Array.from(organizedTabsWithSoloFirst, (tab) => tab.id), [306, 303, 302, 304, 305, 301]);
+
 const samePrimaryDomainUrls = [
   'https://mail.google.com/inbox',
   'https://docs.google.com/document',

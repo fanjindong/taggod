@@ -15,6 +15,7 @@
       .small { font: 400 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #697386; }
       .tiny { font: 400 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #8a94a6; }
       .button { font: 500 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .button-strong { font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
       .callout-title { font: 700 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f5f59; }
       .callout-body { font: 400 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #31524f; }
       .num { font: 700 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #ffffff; }
@@ -24,91 +25,97 @@
 
   <rect width="1080" height="760" fill="#eef2f7"/>
   <text x="48" y="54" class="page-title">标签之神使用页面</text>
-  <text x="48" y="84" class="page-subtitle">聚焦一件事：把散乱标签一键整理成清晰、稳定的分组结构。</text>
+  <text x="48" y="84" class="page-subtitle">主入口聚焦整理当前窗口，常用处理留在首屏，高级配置集中管理。</text>
 
-  <g id="popup" transform="translate(64 118)" filter="url(#shadow)">
-    <rect x="0" y="0" width="420" height="572" rx="18" fill="#ffffff" stroke="#dfe5ef"/>
+  <g id="popup" transform="translate(64 112)" filter="url(#shadow)">
+    <rect x="0" y="0" width="420" height="590" rx="18" fill="#ffffff" stroke="#dfe5ef"/>
 
     <text x="16" y="34" class="popup-title">一键整理</text>
     <text x="16" y="58" class="small">把当前窗口整理成清晰分组</text>
-    <text x="16" y="78" class="tiny">默认打开</text>
-    <rect x="70" y="64" width="50" height="20" rx="5" fill="#ffffff" stroke="#c2cad8"/>
-    <text x="79" y="78" class="kbd">⌘⇧L</text>
-    <text x="128" y="78" class="tiny">/</text>
-    <rect x="140" y="64" width="86" height="20" rx="5" fill="#ffffff" stroke="#c2cad8"/>
-    <text x="150" y="78" class="kbd">Ctrl Shift L</text>
+    <text x="16" y="78" class="tiny">打开弹窗</text>
+    <rect x="74" y="64" width="50" height="20" rx="5" fill="#ffffff" stroke="#c2cad8"/>
+    <text x="83" y="78" class="kbd">⌘⇧L</text>
+    <text x="132" y="78" class="tiny">/</text>
+    <rect x="144" y="64" width="86" height="20" rx="5" fill="#ffffff" stroke="#c2cad8"/>
+    <text x="154" y="78" class="kbd">Ctrl Shift L</text>
 
     <text x="16" y="118" class="small">86 个标签 · 18 个主域名</text>
     <text x="322" y="118" class="small">6 个重复</text>
 
-    <rect x="16" y="144" width="260" height="38" rx="8" fill="#1f6feb" stroke="#1f6feb"/>
-    <text x="105" y="168" class="button" fill="#ffffff">整理当前窗口</text>
-    <rect x="288" y="144" width="116" height="38" rx="8" fill="#ffffff" stroke="#d8dee9"/>
-    <text x="322" y="168" class="button" fill="#172033">更多工具</text>
-    <text x="16" y="204" class="tiny">默认快捷键</text>
-    <rect x="86" y="189" width="52" height="20" rx="5" fill="#ffffff" stroke="#c2cad8"/>
-    <text x="95" y="203" class="kbd">⌘⇧Y</text>
-    <text x="146" y="204" class="tiny">/</text>
-    <rect x="158" y="189" width="86" height="20" rx="5" fill="#ffffff" stroke="#c2cad8"/>
-    <text x="168" y="203" class="kbd">Ctrl Shift Y</text>
+    <rect x="16" y="144" width="388" height="44" rx="8" fill="#1f6feb" stroke="#1f6feb"/>
+    <text x="164" y="172" class="button-strong" fill="#ffffff">整理当前窗口</text>
 
-    <line x1="16" y1="232" x2="404" y2="232" stroke="#d8dee9"/>
-    <text x="16" y="260" class="section-title">整理设置</text>
-    <rect x="16" y="278" width="244" height="44" rx="8" fill="#ffffff" stroke="#d8dee9"/>
-    <text x="28" y="305" class="label">分组阈值</text>
-    <rect x="160" y="284" width="84" height="32" rx="8" fill="#f8fafd" stroke="#d8dee9"/>
-    <text x="194" y="305" class="label">2</text>
-    <text x="272" y="305" class="small">个标签</text>
-    <rect x="344" y="286" width="60" height="30" rx="8" fill="#ffffff" stroke="#d8dee9"/>
-    <text x="362" y="306" class="button" fill="#172033">保存</text>
+    <rect x="16" y="200" width="188" height="36" rx="8" fill="#ffffff" stroke="#d8dee9"/>
+    <text x="82" y="223" class="button" fill="#172033">智能去重</text>
+    <rect x="216" y="200" width="188" height="36" rx="8" fill="#ffffff" stroke="#d8dee9"/>
+    <text x="282" y="223" class="button" fill="#172033">保存工作集</text>
 
-    <text x="16" y="358" class="section-title">管理操作</text>
-    <text x="16" y="382" class="tiny">智能去重会先确认，不会直接关闭。</text>
-    <rect x="16" y="398" width="188" height="36" rx="8" fill="#ffffff" stroke="#d8dee9"/>
-    <text x="82" y="421" class="button" fill="#172033">智能去重</text>
-    <rect x="216" y="398" width="188" height="36" rx="8" fill="#ffffff" stroke="#d8dee9"/>
-    <text x="282" y="421" class="button" fill="#172033">保存工作集</text>
+    <text x="16" y="266" class="tiny">默认快捷键</text>
+    <rect x="86" y="251" width="52" height="20" rx="5" fill="#ffffff" stroke="#c2cad8"/>
+    <text x="95" y="265" class="kbd">⌘⇧Y</text>
+    <text x="146" y="266" class="tiny">/</text>
+    <rect x="158" y="251" width="86" height="20" rx="5" fill="#ffffff" stroke="#c2cad8"/>
+    <text x="168" y="265" class="kbd">Ctrl Shift Y</text>
+    <rect x="310" y="246" width="94" height="30" rx="8" fill="#ffffff" stroke="#d8dee9"/>
+    <text x="334" y="266" class="button" fill="#172033">高级管理</text>
 
-    <text x="16" y="470" class="section-title">优先分组</text>
-    <rect x="16" y="488" width="388" height="48" rx="8" fill="#ffffff" stroke="#d8dee9"/>
-    <text x="28" y="510" class="label">github</text>
-    <text x="28" y="528" class="small">12 个标签 · 优先</text>
-    <text x="374" y="520" class="label">★</text>
+    <line x1="16" y1="304" x2="404" y2="304" stroke="#d8dee9"/>
+    <text x="16" y="332" class="section-title">整理设置</text>
+    <rect x="16" y="350" width="244" height="44" rx="8" fill="#ffffff" stroke="#d8dee9"/>
+    <text x="28" y="377" class="label">分组阈值</text>
+    <rect x="160" y="356" width="84" height="32" rx="8" fill="#f8fafd" stroke="#d8dee9"/>
+    <text x="194" y="377" class="label">2</text>
+    <text x="272" y="377" class="small">个标签</text>
+    <rect x="344" y="358" width="60" height="30" rx="8" fill="#ffffff" stroke="#d8dee9"/>
+    <text x="362" y="378" class="button" fill="#172033">保存</text>
+
+    <text x="16" y="430" class="section-title">分组规则</text>
+    <rect x="304" y="410" width="100" height="30" rx="8" fill="#ffffff" stroke="#d8dee9"/>
+    <text x="321" y="430" class="button" fill="#172033">新增规则</text>
+    <text x="16" y="454" class="tiny">规则从上到下匹配，第一条命中决定标签归到哪个分组。</text>
+    <rect x="16" y="472" width="388" height="48" rx="8" fill="#ffffff" stroke="#d8dee9"/>
+    <text x="28" y="494" class="label">项目 A</text>
+    <text x="28" y="512" class="small">归入：项目 A · 域名包含 github.com</text>
+
+    <text x="16" y="552" class="section-title">优先分组</text>
+    <rect x="104" y="532" width="82" height="30" rx="8" fill="#ffffff" stroke="#d8dee9"/>
+    <text x="122" y="552" class="button" fill="#172033">工作集</text>
+    <rect x="16" y="574" width="388" height="2" rx="1" fill="#d8dee9"/>
   </g>
 
-  <g id="badges" transform="translate(64 118)">
-    <circle cx="262" cy="163" r="16" fill="#0f766e"/>
-    <text x="257" y="169" class="num">1</text>
-    <circle cx="388" cy="300" r="16" fill="#0f766e"/>
-    <text x="383" y="306" class="num">2</text>
-    <circle cx="388" cy="512" r="16" fill="#0f766e"/>
-    <text x="383" y="518" class="num">3</text>
+  <g id="badges" transform="translate(64 112)">
+    <circle cx="388" cy="166" r="16" fill="#0f766e"/>
+    <text x="383" y="172" class="num">1</text>
+    <circle cx="388" cy="218" r="16" fill="#0f766e"/>
+    <text x="383" y="224" class="num">2</text>
+    <circle cx="430" cy="261" r="16" fill="#0f766e"/>
+    <text x="425" y="267" class="num">3</text>
   </g>
 
   <g id="callouts">
-    <path d="M536 230 L340 280" stroke="#0f766e" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
-    <rect x="548" y="202" width="430" height="126" rx="14" fill="#ecfdf5" stroke="#99d8cf"/>
-    <circle cx="548" cy="202" r="17" fill="#0f766e"/>
-    <text x="543" y="208" class="num">1</text>
-    <text x="578" y="236" class="callout-title">一键整理当前窗口</text>
-    <text x="578" y="268" class="callout-body">主入口只保留整理动作，避免和 Chrome</text>
-    <text x="578" y="294" class="callout-body">原生找回能力重复。</text>
+    <path d="M536 214 L468 278" stroke="#0f766e" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <rect x="548" y="170" width="430" height="126" rx="14" fill="#ecfdf5" stroke="#99d8cf"/>
+    <circle cx="548" cy="170" r="17" fill="#0f766e"/>
+    <text x="543" y="176" class="num">1</text>
+    <text x="578" y="204" class="callout-title">一键整理当前窗口</text>
+    <text x="578" y="236" class="callout-body">打开弹窗后先处理当前窗口，主按钮</text>
+    <text x="578" y="262" class="callout-body">单独成行，减少误点和选择成本。</text>
 
-    <path d="M536 420 L456 418" stroke="#0f766e" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
-    <rect x="548" y="366" width="430" height="112" rx="14" fill="#ecfdf5" stroke="#99d8cf"/>
-    <circle cx="548" cy="366" r="17" fill="#0f766e"/>
-    <text x="543" y="372" class="num">2</text>
-    <text x="578" y="400" class="callout-title">整理规则可配置</text>
-    <text x="578" y="432" class="callout-body">分组阈值控制何时创建原生分组，</text>
-    <text x="578" y="458" class="callout-body">减少单标签分组带来的噪音。</text>
+    <path d="M536 374 L456 330" stroke="#0f766e" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <rect x="548" y="330" width="430" height="132" rx="14" fill="#ecfdf5" stroke="#99d8cf"/>
+    <circle cx="548" cy="330" r="17" fill="#0f766e"/>
+    <text x="543" y="336" class="num">2</text>
+    <text x="578" y="364" class="callout-title">常用辅助操作前移</text>
+    <text x="578" y="396" class="callout-body">智能去重会先确认，不会直接关闭；</text>
+    <text x="578" y="422" class="callout-body">保存工作集用于暂存当前窗口。</text>
 
-    <path d="M536 610 L456 630" stroke="#0f766e" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
-    <rect x="548" y="546" width="430" height="126" rx="14" fill="#ecfdf5" stroke="#99d8cf"/>
-    <circle cx="548" cy="546" r="17" fill="#0f766e"/>
-    <text x="543" y="552" class="num">3</text>
-    <text x="578" y="580" class="callout-title">围绕分组继续增强</text>
-    <text x="578" y="612" class="callout-body">优先分组、智能去重和工作集都服务于</text>
-    <text x="578" y="638" class="callout-body">整理后的标签结构。</text>
+    <path d="M536 568 L456 374" stroke="#0f766e" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+    <rect x="548" y="522" width="430" height="132" rx="14" fill="#ecfdf5" stroke="#99d8cf"/>
+    <circle cx="548" cy="522" r="17" fill="#0f766e"/>
+    <text x="543" y="528" class="num">3</text>
+    <text x="578" y="556" class="callout-title">整理规则可配置</text>
+    <text x="578" y="588" class="callout-body">分组阈值、分组规则、优先分组和</text>
+    <text x="578" y="614" class="callout-body">工作集列表统一放在展开区。</text>
   </g>
 
   <text x="64" y="724" class="small">示例数据用于说明界面位置，实际内容来自你当前打开的标签页。</text>

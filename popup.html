@@ -27,19 +27,23 @@
       </section>
 
       <section class="quick-action-area" aria-label="常用操作">
-        <div class="action-grid quick-action-grid">
-          <button id="organizeButton" class="primary-action" type="button">整理当前窗口</button>
-          <button id="moreToolsButton" type="button" aria-expanded="false" aria-controls="moreToolsSection">更多工具</button>
+        <button id="organizeButton" class="primary-action main-organize-action" type="button">整理当前窗口</button>
+        <div class="secondary-action-grid" aria-label="当前窗口辅助操作">
+          <button id="scanDuplicatesButton" type="button" title="智能去重会先确认，不会直接关闭。">智能去重</button>
+          <button id="saveWorkspaceButton" type="button">保存工作集</button>
         </div>
-        <p class="helper-text action-helper-text">
-          <span>默认快捷键</span>
-          <kbd>⌘⇧Y</kbd>
-          <span>/</span>
-          <kbd>Ctrl Shift Y</kbd>
-        </p>
+        <div class="quick-action-footer">
+          <p class="helper-text action-helper-text">
+            <span>默认快捷键</span>
+            <kbd>⌘⇧Y</kbd>
+            <span>/</span>
+            <kbd>Ctrl Shift Y</kbd>
+          </p>
+          <button id="moreToolsButton" class="management-toggle-button" type="button" aria-expanded="false" aria-controls="moreToolsSection">高级管理</button>
+        </div>
       </section>
 
-      <section id="moreToolsSection" class="more-tools-section is-hidden" aria-label="更多工具" hidden>
+      <section id="moreToolsSection" class="more-tools-section is-hidden" aria-label="高级管理" hidden>
         <section class="settings-strip" aria-label="整理设置">
           <label class="setting-field" for="minTabsPerGroupInput">
             <span>分组阈值</span>
@@ -61,15 +65,57 @@
           </div>
         </section>
 
-        <section class="list-section">
+        <section class="list-section group-rule-section" aria-label="分组规则">
           <div class="section-title">
-            <h2>管理操作</h2>
+            <h2>分组规则</h2>
+            <button id="newGroupRuleButton" class="compact-button" type="button">新增分组规则</button>
           </div>
-          <p class="helper-text section-helper-text">智能去重会先确认，不会直接关闭。</p>
-          <div class="tool-button-grid">
-            <button id="scanDuplicatesButton" type="button">智能去重</button>
-            <button id="saveWorkspaceButton" type="button">保存工作集</button>
-          </div>
+          <p class="helper-text section-helper-text">规则从上到下匹配，第一条命中决定标签归到哪个分组。</p>
+
+          <form id="groupRuleForm" class="group-rule-form is-hidden" hidden>
+            <label class="rule-field">
+              <span>规则名称</span>
+              <input id="groupRuleNameInput" type="text" placeholder="默认使用目标分组名">
+              <small id="groupRuleNamePreview">未填写时会使用目标分组名。</small>
+            </label>
+
+            <label class="rule-field">
+              <span>目标分组名</span>
+              <input id="groupRuleTargetTitleInput" type="text" placeholder="例如：项目 A">
+              <small>用于创建分组标题，也会生成稳定的自定义分组标识。</small>
+            </label>
+
+            <label class="rule-field">
+              <span>分组阈值</span>
+              <input id="groupRuleThresholdInput" type="number" min="1" step="1" inputmode="numeric" placeholder="留空使用全局阈值">
+              <small id="groupRuleThresholdHelp">当前全局：至少 2 个标签。</small>
+            </label>
+
+            <label class="rule-toggle">
+              <input id="groupRuleEnabledInput" type="checkbox" checked>
+              <span>启用此规则</span>
+            </label>
+
+            <div class="condition-editor" aria-label="匹配条件">
+              <div class="condition-editor-header">
+                <span>条件组</span>
+                <div class="inline-actions">
+                  <button id="addRuleConditionButton" class="compact-button" type="button">添加条件</button>
+                  <button id="addRuleGroupButton" class="compact-button" type="button">添加条件组</button>
+                </div>
+              </div>
+              <div id="groupRuleConditionList" class="condition-list"></div>
+              <p class="helper-text">条件组可选择满足全部或满足任一；条件值没有默认值，必须填写后才会参与匹配。</p>
+            </div>
+
+            <div class="inline-actions">
+              <button id="saveGroupRuleButton" class="primary-action" type="submit">保存规则</button>
+              <button id="cancelGroupRuleButton" type="button">取消</button>
+            </div>
+            <p id="groupRuleFormStatus" class="helper-text rule-form-status" role="status"></p>
+          </form>
+
+          <div id="groupRuleList" class="group-rule-list"></div>
         </section>
 
         <section class="list-section">

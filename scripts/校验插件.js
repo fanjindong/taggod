@@ -45,6 +45,26 @@ if (!manifest.icons || !manifest.action || !manifest.action.default_icon) {
 assert.ok(manifest.description.includes('一键整理'));
 assert.ok(!manifest.description.includes('搜索'));
 
+const popupHtmlPath = path.join(rootDir, 'popup.html');
+const popupStructureHtmlContent = fs.readFileSync(popupHtmlPath, 'utf8');
+const popupCssPath = path.join(rootDir, 'popup.css');
+const popupStructureCssContent = fs.readFileSync(popupCssPath, 'utf8');
+const readmePath = path.join(rootDir, 'README.md');
+const readmeStructureContent = fs.readFileSync(readmePath, 'utf8');
+
+assert.ok(popupStructureHtmlContent.includes('class="primary-action main-organize-action"'));
+assert.ok(popupStructureHtmlContent.includes('class="secondary-action-grid"'));
+assert.ok(popupStructureHtmlContent.includes('aria-label="高级管理"'));
+assert.ok(popupStructureHtmlContent.includes('>高级管理</button>'));
+assert.ok(!popupStructureHtmlContent.includes('<h2>管理操作</h2>'));
+assert.strictEqual((popupStructureHtmlContent.match(/id="scanDuplicatesButton"/g) || []).length, 1);
+assert.strictEqual((popupStructureHtmlContent.match(/id="saveWorkspaceButton"/g) || []).length, 1);
+assert.ok(popupStructureCssContent.includes('.main-organize-action'));
+assert.ok(popupStructureCssContent.includes('.secondary-action-grid'));
+assert.ok(popupStructureCssContent.includes('.management-toggle-button'));
+assert.ok(readmeStructureContent.includes('“高级管理”里新增自定义分组规则'));
+assert.ok(!readmeStructureContent.includes('“更多工具”里新增自定义分组规则'));
+
 for (const scriptFile of ['background.js', 'popup.js']) {
   const scriptPath = path.join(rootDir, scriptFile);
   const scriptContent = fs.readFileSync(scriptPath, 'utf8');
@@ -82,6 +102,14 @@ const backgroundSandbox = {
 vm.createContext(backgroundSandbox);
 vm.runInContext(backgroundContent, backgroundSandbox, { filename: 'background.js' });
 
+function makeConditionTree(children, logic = 'and') {
+  return {
+    type: 'group',
+    logic,
+    children: children.map((condition) => Object.assign({ type: 'condition' }, condition))
+  };
+}
+
 // 主域名归并是核心分组契约，校验脚本覆盖它可以避免后续改动退回完整域名分组。
 assert.strictEqual(backgroundSandbox.getDomainKey('https://mail.google.com/inbox'), 'google.com');
 assert.strictEqual(backgroundSandbox.getDomainKey('https://docs.google.com/document'), 'google.com');
@@ -98,6 +126,333 @@ assert.strictEqual(backgroundSandbox.normalizeSettings({ minTabsPerGroup: 0 }).m
 assert.strictEqual(backgroundSandbox.normalizeSettings({ minTabsPerGroup: 1 }).minTabsPerGroup, 1);
 assert.strictEqual(backgroundSandbox.normalizeSettings({ minTabsPerGroup: 2.5 }).minTabsPerGroup, 2);
 assert.strictEqual(backgroundSandbox.normalizeSettings({ minTabsPerGroup: '3' }).minTabsPerGroup, 2);
+
+const normalizedRuleSettings = backgroundSandbox.normalizeSettings({
+  minTabsPerGroup: 3,
+  groupRules: [
+    {
+      id: 'rule-old',
+      name: '  项目 A  ',
+      enabled: true,
+      targetGroupKey: 'custom:项目 A',
+      targetTitle: '  项目 A  ',
+      minTabsPerGroup: 1,
+      conditionTree: makeConditionTree([
+        { field: 'hostname', operator: 'contains', value: 'github.com' }
+      ]),
+      createdAt: 10,
+      updatedAt: 20
+    },
+    {
+      id: '',
+      name: '',
+      targetTitle: '',
+      conditionTree: makeConditionTree([])
+    }
+  ]
+});
+
+assert.strictEqual(normalizedRuleSettings.groupRules.length, 1);
+assert.strictEqual(normalizedRuleSettings.groupRules[0].name, '项目 A');
+assert.strictEqual(normalizedRuleSettings.groupRules[0].targetTitle, '项目 A');
+assert.strictEqual(normalizedRuleSettings.groupRules[0].minTabsPerGroup, 1);
+assert.strictEqual(normalizedRuleSettings.groupRules[0].conditionTree.children[0].value, 'github.com');
+assert.strictEqual(normalizedRuleSettings.groupRules[0].conditions, undefined);
+
+const normalizedTreeRuleSettings = backgroundSandbox.normalizeSettings({
+  minTabsPerGroup: 2,
+  groupRules: [
+    {
+      id: 'rule-project-a',
+      name: '项目 A',
+      enabled: true,
+      targetGroupKey: 'custom:项目 A',
+      targetTitle: '项目 A',
+      minTabsPerGroup: null,
+      conditionTree: {
+        type: 'group',
+        logic: 'and',
+        children: [
+          {
+            type: 'group',
+            logic: 'or',
+            children: [
+              { type: 'condition', field: 'hostname', operator: 'contains', value: 'github.com' },
+              { type: 'condition', field: 'hostname', operator: 'contains', value: 'docs.example.com' }
+            ]
+          },
+          { type: 'condition', field: 'path', operator: 'contains', value: 'project-a' }
+        ]
+      },
+      createdAt: 1,
+      updatedAt: 1
+    },
+    {
+      id: 'rule-old-conditions',
+      name: '旧规则不兼容',
+      enabled: true,
+      targetGroupKey: 'custom:旧规则',
+      targetTitle: '旧规则',
+      conditions: [{ field: 'hostname', operator: 'contains', value: 'legacy.example.com' }]
+    }
+  ]
+});
+
+assert.strictEqual(normalizedTreeRuleSettings.groupRules.length, 1);
+assert.strictEqual(normalizedTreeRuleSettings.groupRules[0].conditionTree.logic, 'and');
+assert.strictEqual(normalizedTreeRuleSettings.groupRules[0].conditionTree.children[0].logic, 'or');
+assert.strictEqual(backgroundSandbox.countConditionTreeConditions(normalizedTreeRuleSettings.groupRules[0].conditionTree), 3);
+
+assert.strictEqual(backgroundSandbox.doesRuleMatchTab(normalizedTreeRuleSettings.groupRules[0], {
+  title: '项目 A 仓库',
+  url: 'https://github.com/my-org/project-a/issues',
+  pinned: false
+}), true);
+assert.strictEqual(backgroundSandbox.doesRuleMatchTab(normalizedTreeRuleSettings.groupRules[0], {
+  title: '项目 A 文档',
+  url: 'https://docs.example.com/project-a/intro',
+  pinned: false
+}), true);
+assert.strictEqual(backgroundSandbox.doesRuleMatchTab(normalizedTreeRuleSettings.groupRules[0], {
+  title: '其他仓库',
+  url: 'https://github.com/my-org/other/issues',
+  pinned: false
+}), false);
+assert.strictEqual(backgroundSandbox.doesRuleMatchTab(normalizedTreeRuleSettings.groupRules[0], {
+  title: '其他站点',
+  url: 'https://jira.example.com/project-a',
+  pinned: false
+}), false);
+
+const matchedProjectGroup = backgroundSandbox.getResolvedGroupInfo({
+  title: '项目 A 问题',
+  url: 'https://github.com/my-org/project-a/issues',
+  pinned: false
+}, normalizedRuleSettings);
+assert.strictEqual(matchedProjectGroup.groupKey, 'custom:项目 A');
+assert.strictEqual(matchedProjectGroup.title, '项目 A');
+assert.strictEqual(matchedProjectGroup.ruleId, 'rule-old');
+
+const fallbackProjectGroup = backgroundSandbox.getResolvedGroupInfo({
+  title: '邮箱',
+  url: 'https://mail.google.com/inbox',
+  pinned: false
+}, normalizedRuleSettings);
+assert.strictEqual(fallbackProjectGroup.groupKey, 'google.com');
+assert.strictEqual(fallbackProjectGroup.title, 'google.com');
+assert.strictEqual(fallbackProjectGroup.ruleId, '');
+
+assert.strictEqual(backgroundSandbox.doesRuleMatchTab(normalizedRuleSettings.groupRules[0], {
+  title: '项目 A',
+  url: 'https://github.com/my-org/project-a',
+  pinned: false
+}), true);
+assert.strictEqual(backgroundSandbox.doesRuleMatchTab(normalizedRuleSettings.groupRules[0], {
+  title: '项目 A',
+  url: 'https://github.com/my-org/project-a',
+  pinned: true
+}), false);
+assert.strictEqual(backgroundSandbox.doesRuleMatchTab(normalizedRuleSettings.groupRules[0], {
+  title: '项目 B',
+  url: 'https://gitlab.com/my-org/project-a',
+  pinned: false
+}), false);
+
+const boundaryRuleInput = {
+  minTabsPerGroup: 4,
+  groupRules: [
+    {
+      name: '精确匹配项目',
+      targetTitle: '精确匹配项目',
+      minTabsPerGroup: '',
+      conditionTree: makeConditionTree([
+        { field: 'primaryDomain', operator: 'equals', value: 'github.com' }
+      ])
+    },
+    {
+      name: '路径前缀项目',
+      targetTitle: '路径前缀项目',
+      conditionTree: makeConditionTree([
+        { field: 'path', operator: 'startsWith', value: '/my-org' }
+      ])
+    },
+    {
+      name: '多条件项目',
+      targetTitle: '多条件项目',
+      conditionTree: makeConditionTree([
+        { field: 'hostname', operator: 'contains', value: 'github.com' },
+        { field: 'path', operator: 'startsWith', value: '/missing' }
+      ])
+    },
+    {
+      name: '停用项目',
+      enabled: false,
+      targetTitle: '停用项目',
+      conditionTree: makeConditionTree([
+        { field: 'hostname', operator: 'contains', value: 'github.com' }
+      ])
+    },
+    {
+      name: '标题兜底项目',
+      targetTitle: '标题兜底项目',
+      conditionTree: makeConditionTree([
+        { field: 'title', operator: 'contains', value: '内部页面' }
+      ])
+    },
+    {
+      name: '条件截断项目',
+      targetTitle: '条件截断项目',
+      conditionTree: makeConditionTree([
+        { field: 'title', operator: 'contains', value: '不会命中标题' },
+        { field: 'url', operator: 'contains', value: '不会命中网址' },
+        { field: 'hostname', operator: 'contains', value: '不会命中主机' },
+        { field: 'primaryDomain', operator: 'equals', value: 'missing.example' },
+        { field: 'path', operator: 'startsWith', value: '/missing' },
+        { field: 'title', operator: 'contains', value: '第六条件可以命中' }
+      ])
+    }
+  ]
+};
+const normalizedBoundaryRuleSettings = backgroundSandbox.normalizeSettings(boundaryRuleInput);
+const normalizedBoundaryRuleSettingsAgain = backgroundSandbox.normalizeSettings(boundaryRuleInput);
+const swappedBoundaryRuleInput = Object.assign({}, boundaryRuleInput, {
+  groupRules: [
+    boundaryRuleInput.groupRules[1],
+    boundaryRuleInput.groupRules[0],
+    ...boundaryRuleInput.groupRules.slice(2)
+  ]
+});
+const normalizedSwappedBoundaryRuleSettings = backgroundSandbox.normalizeSettings(swappedBoundaryRuleInput);
+const boundaryRuleIdMap = new Map(Array.from(normalizedBoundaryRuleSettings.groupRules, (rule) => [rule.targetTitle, rule.id]));
+const swappedBoundaryRuleIdMap = new Map(Array.from(normalizedSwappedBoundaryRuleSettings.groupRules, (rule) => [rule.targetTitle, rule.id]));
+
+assert.strictEqual(normalizedBoundaryRuleSettings.groupRules.length, 6);
+assert.notStrictEqual(
+  normalizedBoundaryRuleSettings.groupRules[0].id,
+  normalizedBoundaryRuleSettings.groupRules[1].id
+);
+assert.strictEqual(
+  normalizedBoundaryRuleSettings.groupRules[0].id,
+  normalizedBoundaryRuleSettingsAgain.groupRules[0].id
+);
+assert.strictEqual(
+  normalizedBoundaryRuleSettings.groupRules[1].id,
+  normalizedBoundaryRuleSettingsAgain.groupRules[1].id
+);
+assert.strictEqual(boundaryRuleIdMap.get('精确匹配项目'), swappedBoundaryRuleIdMap.get('精确匹配项目'));
+assert.strictEqual(boundaryRuleIdMap.get('路径前缀项目'), swappedBoundaryRuleIdMap.get('路径前缀项目'));
+
+const duplicatedGeneratedIdSettings = backgroundSandbox.normalizeSettings({
+  groupRules: [
+    boundaryRuleInput.groupRules[0],
+    boundaryRuleInput.groupRules[0]
+  ]
+});
+assert.strictEqual(duplicatedGeneratedIdSettings.groupRules.length, 2);
+assert.notStrictEqual(
+  duplicatedGeneratedIdSettings.groupRules[0].id,
+  duplicatedGeneratedIdSettings.groupRules[1].id
+);
+assert.strictEqual(
+  duplicatedGeneratedIdSettings.groupRules[1].id,
+  `${duplicatedGeneratedIdSettings.groupRules[0].id}-2`
+);
+
+const sameTargetDifferentIdentityInput = {
+  groupRules: [
+    {
+      name: '同目标规则一',
+      targetGroupKey: 'custom:同目标',
+      targetTitle: '同目标',
+      minTabsPerGroup: 1,
+      conditionTree: makeConditionTree([
+        { field: 'hostname', operator: 'contains', value: 'github.com' }
+      ])
+    },
+    {
+      name: '同目标规则二',
+      targetGroupKey: 'custom:同目标',
+      targetTitle: '同目标',
+      minTabsPerGroup: 2,
+      conditionTree: makeConditionTree([
+        { field: 'hostname', operator: 'contains', value: 'github.com' }
+      ])
+    }
+  ]
+};
+const normalizedSameTargetDifferentIdentitySettings = backgroundSandbox.normalizeSettings(sameTargetDifferentIdentityInput);
+const normalizedSwappedSameTargetDifferentIdentitySettings = backgroundSandbox.normalizeSettings({
+  groupRules: [
+    sameTargetDifferentIdentityInput.groupRules[1],
+    sameTargetDifferentIdentityInput.groupRules[0]
+  ]
+});
+const sameTargetDifferentIdentityIdMap = new Map(Array.from(
+  normalizedSameTargetDifferentIdentitySettings.groupRules,
+  (rule) => [rule.name, rule.id]
+));
+const swappedSameTargetDifferentIdentityIdMap = new Map(Array.from(
+  normalizedSwappedSameTargetDifferentIdentitySettings.groupRules,
+  (rule) => [rule.name, rule.id]
+));
+assert.notStrictEqual(
+  sameTargetDifferentIdentityIdMap.get('同目标规则一'),
+  sameTargetDifferentIdentityIdMap.get('同目标规则二')
+);
+assert.strictEqual(
+  sameTargetDifferentIdentityIdMap.get('同目标规则一'),
+  swappedSameTargetDifferentIdentityIdMap.get('同目标规则一')
+);
+assert.strictEqual(
+  sameTargetDifferentIdentityIdMap.get('同目标规则二'),
+  swappedSameTargetDifferentIdentityIdMap.get('同目标规则二')
+);
+
+assert.strictEqual(
+  backgroundSandbox.countConditionTreeConditions(normalizedBoundaryRuleSettings.groupRules[5].conditionTree),
+  6
+);
+assert.strictEqual(backgroundSandbox.doesRuleMatchTab(normalizedBoundaryRuleSettings.groupRules[5], {
+  title: '第六条件可以命中',
+  url: 'https://example.com/a',
+  pinned: false
+}), false);
+assert.strictEqual(backgroundSandbox.doesRuleMatchTab(normalizedBoundaryRuleSettings.groupRules[0], {
+  title: '精确匹配',
+  url: 'https://github.com/my-org/project-a',
+  pinned: false
+}), true);
+assert.strictEqual(backgroundSandbox.doesRuleMatchTab(normalizedBoundaryRuleSettings.groupRules[1], {
+  title: '路径前缀',
+  url: 'https://github.com/my-org/project-a',
+  pinned: false
+}), true);
+assert.strictEqual(backgroundSandbox.doesRuleMatchTab(normalizedBoundaryRuleSettings.groupRules[2], {
+  title: '多条件',
+  url: 'https://github.com/my-org/project-a',
+  pinned: false
+}), false);
+assert.strictEqual(backgroundSandbox.doesRuleMatchTab(normalizedBoundaryRuleSettings.groupRules[3], {
+  title: '停用项目',
+  url: 'https://github.com/my-org/project-a',
+  pinned: false
+}), false);
+
+const fallbackThresholdGroup = backgroundSandbox.getResolvedGroupInfo({
+  title: '精确匹配',
+  url: 'https://github.com/my-org/project-a',
+  pinned: false
+}, normalizedBoundaryRuleSettings);
+assert.strictEqual(fallbackThresholdGroup.minTabsPerGroup, 4);
+
+assert.strictEqual(backgroundSandbox.doesRuleMatchTab(normalizedBoundaryRuleSettings.groupRules[4], {
+  title: '内部页面标题',
+  url: '不是有效网址',
+  pinned: false
+}), true);
+
+assert.strictEqual(matchedProjectGroup.minTabsPerGroup, 1);
+
 assert.strictEqual(backgroundSandbox.shouldCreateNativeGroup([1, 2], { minTabsPerGroup: 2 }), true);
 assert.strictEqual(backgroundSandbox.shouldCreateNativeGroup([1, 2], { minTabsPerGroup: 3 }), false);
 assert.strictEqual(backgroundSandbox.shouldCreateNativeGroup([1], { minTabsPerGroup: 1 }), true);
@@ -144,6 +499,380 @@ const organizedTabsWithSoloFirst = backgroundSandbox.buildOrganizedTabs([
   priorityGroups: [{ groupKey: 'example.com' }]
 });
 assert.deepStrictEqual(Array.from(organizedTabsWithSoloFirst, (tab) => tab.id), [306, 303, 302, 304, 305, 301]);
+
+const customRuleSettings = backgroundSandbox.normalizeSettings({
+  minTabsPerGroup: 3,
+  priorityGroups: [],
+  groupRules: [
+    {
+      id: 'rule-project-a-github',
+      name: '项目 A 仓库',
+      enabled: true,
+      targetGroupKey: 'custom:项目 A',
+      targetTitle: '项目 A',
+      minTabsPerGroup: null,
+      conditionTree: makeConditionTree([{ field: 'hostname', operator: 'contains', value: 'github.com' }]),
+      createdAt: 1,
+      updatedAt: 1
+    },
+    {
+      id: 'rule-project-a-doc',
+      name: '项目 A 文档',
+      enabled: true,
+      targetGroupKey: 'custom:项目 A',
+      targetTitle: '项目 A',
+      minTabsPerGroup: null,
+      conditionTree: makeConditionTree([{ field: 'hostname', operator: 'contains', value: 'docs.example.com' }]),
+      createdAt: 2,
+      updatedAt: 2
+    }
+  ]
+});
+
+const customOrganizedTabs = backgroundSandbox.buildOrganizedTabs([
+  { id: 401, title: '零散', url: 'https://solo.example.com', pinned: false, index: 0 },
+  { id: 402, title: '仓库', url: 'https://github.com/my-org/project-a', pinned: false, index: 1 },
+  { id: 403, title: '其他', url: 'https://other.example.com', pinned: false, index: 2 },
+  { id: 404, title: '文档', url: 'https://docs.example.com/project-a', pinned: false, index: 3 }
+], customRuleSettings);
+const customOrganizedIds = Array.from(customOrganizedTabs, (tab) => tab.id);
+assert.strictEqual(Math.abs(customOrganizedIds.indexOf(402) - customOrganizedIds.indexOf(404)), 1);
+
+const orRuleOrganizedTabs = backgroundSandbox.buildOrganizedTabs([
+  { id: 701, title: '仓库', url: 'https://github.com/my-org/project-a', pinned: false, index: 0 },
+  { id: 702, title: '普通', url: 'https://other.example.com/a', pinned: false, index: 1 },
+  { id: 703, title: '文档', url: 'https://docs.example.com/project-a', pinned: false, index: 2 }
+], backgroundSandbox.normalizeSettings({
+  minTabsPerGroup: 2,
+  priorityGroups: [],
+  groupRules: [
+    {
+      id: 'rule-project-a-or',
+      name: '项目 A',
+      enabled: true,
+      targetGroupKey: 'custom:项目 A',
+      targetTitle: '项目 A',
+      minTabsPerGroup: null,
+      conditionTree: {
+        type: 'group',
+        logic: 'or',
+        children: [
+          { type: 'condition', field: 'hostname', operator: 'contains', value: 'github.com' },
+          { type: 'condition', field: 'hostname', operator: 'contains', value: 'docs.example.com' }
+        ]
+      },
+      createdAt: 1,
+      updatedAt: 1
+    }
+  ]
+}));
+// 同一自定义分组内继续沿用完整主机名排序，因此这里断言聚拢结果而不是输入顺序。
+assert.deepStrictEqual(Array.from(orRuleOrganizedTabs, (tab) => tab.id), [703, 701, 702]);
+
+const customGroupSummaries = backgroundSandbox.buildGroupSummaries([
+  { id: 411, title: '仓库', url: 'https://github.com/my-org/project-a', pinned: false, index: 0 },
+  { id: 412, title: '文档', url: 'https://docs.example.com/project-a', pinned: false, index: 1 }
+], customRuleSettings);
+assert.strictEqual(customGroupSummaries.length, 0);
+
+const customRuleThresholdSummaries = backgroundSandbox.buildGroupSummaries([
+  { id: 421, title: '仓库', url: 'https://github.com/my-org/project-a', pinned: false, index: 0 }
+], backgroundSandbox.normalizeSettings({
+  minTabsPerGroup: 3,
+  priorityGroups: [],
+  groupRules: [
+    {
+      id: 'rule-project-a-one',
+      name: '项目 A',
+      enabled: true,
+      targetGroupKey: 'custom:项目 A',
+      targetTitle: '项目 A',
+      minTabsPerGroup: 1,
+      conditionTree: makeConditionTree([{ field: 'hostname', operator: 'contains', value: 'github.com' }]),
+      createdAt: 1,
+      updatedAt: 1
+    }
+  ]
+}));
+assert.strictEqual(customRuleThresholdSummaries.length, 1);
+assert.strictEqual(customRuleThresholdSummaries[0].groupKey, 'custom:项目 A');
+assert.strictEqual(customRuleThresholdSummaries[0].title, '项目 A');
+
+const firstMatchedRuleThresholdSummaries = backgroundSandbox.buildGroupSummaries([
+  { id: 431, title: '仓库', url: 'https://github.com/my-org/project-a', pinned: false, index: 0 },
+  { id: 432, title: '文档', url: 'https://docs.example.com/project-a', pinned: false, index: 1 }
+], backgroundSandbox.normalizeSettings({
+  minTabsPerGroup: 3,
+  priorityGroups: [],
+  groupRules: [
+    {
+      id: 'rule-project-a-github',
+      name: '项目 A 仓库',
+      enabled: true,
+      targetGroupKey: 'custom:项目 A',
+      targetTitle: '项目 A',
+      minTabsPerGroup: 3,
+      conditionTree: makeConditionTree([{ field: 'hostname', operator: 'contains', value: 'github.com' }]),
+      createdAt: 1,
+      updatedAt: 1
+    },
+    {
+      id: 'rule-project-a-doc',
+      name: '项目 A 文档',
+      enabled: true,
+      targetGroupKey: 'custom:项目 A',
+      targetTitle: '项目 A',
+      minTabsPerGroup: 1,
+      conditionTree: makeConditionTree([{ field: 'hostname', operator: 'contains', value: 'docs.example.com' }]),
+      createdAt: 2,
+      updatedAt: 2
+    }
+  ]
+}));
+assert.strictEqual(firstMatchedRuleThresholdSummaries.length, 0);
+
+const customTabSnapshots = backgroundSandbox.buildTabSnapshots([
+  { id: 441, title: '仓库', url: 'https://github.com/my-org/project-a', active: false, pinned: false, index: 0 }
+], customRuleSettings);
+assert.strictEqual(customTabSnapshots[0].groupKey, 'custom:项目 A');
+assert.strictEqual(customTabSnapshots[0].groupTitle, '项目 A');
+
+const customGroupSnapshots = backgroundSandbox.buildGroupSnapshots(customTabSnapshots);
+assert.strictEqual(customGroupSnapshots[0].groupKey, 'custom:项目 A');
+assert.strictEqual(customGroupSnapshots[0].title, '项目 A');
+
+const sameTargetDifferentTitleSettings = backgroundSandbox.normalizeSettings({
+  minTabsPerGroup: 2,
+  priorityGroups: [],
+  groupRules: [
+    {
+      id: 'rule-same-target-one',
+      name: '同组规则一',
+      enabled: true,
+      targetGroupKey: 'custom:同组',
+      targetTitle: '标题一',
+      minTabsPerGroup: null,
+      conditionTree: makeConditionTree([{ field: 'hostname', operator: 'contains', value: 'one.example.com' }]),
+      createdAt: 1,
+      updatedAt: 1
+    },
+    {
+      id: 'rule-same-target-two',
+      name: '同组规则二',
+      enabled: true,
+      targetGroupKey: 'custom:同组',
+      targetTitle: '标题二',
+      minTabsPerGroup: null,
+      conditionTree: makeConditionTree([{ field: 'hostname', operator: 'contains', value: 'two.example.com' }]),
+      createdAt: 2,
+      updatedAt: 2
+    }
+  ]
+});
+const sameTargetDifferentTitleTabs = [
+  { id: 445, title: '规则一标签', url: 'https://one.example.com/a', active: false, pinned: false, index: 0 },
+  { id: 446, title: '规则二标签', url: 'https://two.example.com/a', active: false, pinned: false, index: 1 }
+];
+const sameTargetDifferentTitleSnapshots = backgroundSandbox.buildTabSnapshots(
+  sameTargetDifferentTitleTabs,
+  sameTargetDifferentTitleSettings
+);
+const reversedSameTargetDifferentTitleSnapshots = backgroundSandbox.buildTabSnapshots(
+  [...sameTargetDifferentTitleTabs].reverse(),
+  sameTargetDifferentTitleSettings
+);
+assert.deepStrictEqual(Array.from(sameTargetDifferentTitleSnapshots, (tab) => tab.groupTitle), ['标题一', '标题一']);
+assert.deepStrictEqual(Array.from(reversedSameTargetDifferentTitleSnapshots, (tab) => tab.groupTitle), ['标题一', '标题一']);
+
+const sameTargetDifferentTitleSummaries = backgroundSandbox.buildGroupSummaries(
+  sameTargetDifferentTitleTabs,
+  sameTargetDifferentTitleSettings
+);
+const reversedSameTargetDifferentTitleSummaries = backgroundSandbox.buildGroupSummaries(
+  [...sameTargetDifferentTitleTabs].reverse(),
+  sameTargetDifferentTitleSettings
+);
+assert.strictEqual(sameTargetDifferentTitleSummaries.length, 1);
+assert.strictEqual(reversedSameTargetDifferentTitleSummaries.length, 1);
+assert.strictEqual(sameTargetDifferentTitleSummaries[0].title, '标题一');
+assert.strictEqual(reversedSameTargetDifferentTitleSummaries[0].title, '标题一');
+
+const overshadowedDomainTitleSettings = backgroundSandbox.normalizeSettings({
+  minTabsPerGroup: 1,
+  priorityGroups: [],
+  groupRules: [
+    {
+      id: 'rule-project-a-first',
+      name: '项目 A 优先规则',
+      enabled: true,
+      targetGroupKey: 'custom:项目A',
+      targetTitle: '项目A',
+      minTabsPerGroup: null,
+      conditionTree: makeConditionTree([{ field: 'path', operator: 'startsWith', value: '/my-org/project-a' }]),
+      createdAt: 1,
+      updatedAt: 1
+    },
+    {
+      id: 'rule-github-lower',
+      name: '低优先级代码仓库规则',
+      enabled: true,
+      targetGroupKey: 'github.com',
+      targetTitle: '代码仓库',
+      minTabsPerGroup: null,
+      conditionTree: makeConditionTree([{ field: 'path', operator: 'startsWith', value: '/my-org/project-a' }]),
+      createdAt: 2,
+      updatedAt: 2
+    }
+  ]
+});
+const overshadowedDomainTitleSummaries = backgroundSandbox.buildGroupSummaries([
+  { id: 447, title: '项目仓库', url: 'https://github.com/my-org/project-a', active: false, pinned: false, index: 0 },
+  { id: 448, title: '普通仓库', url: 'https://github.com/other-org/other', active: false, pinned: false, index: 1 }
+], overshadowedDomainTitleSettings);
+const overshadowedGithubSummary = overshadowedDomainTitleSummaries.find((summary) => summary.groupKey === 'github.com');
+assert.strictEqual(overshadowedGithubSummary.title, 'github');
+
+const domainKeyCustomTitleSettings = backgroundSandbox.normalizeSettings({
+  minTabsPerGroup: 2,
+  priorityGroups: [],
+  groupRules: [
+    {
+      id: 'rule-github-project',
+      name: '代码仓库规则',
+      enabled: true,
+      targetGroupKey: 'github.com',
+      targetTitle: '代码仓库',
+      minTabsPerGroup: null,
+      conditionTree: makeConditionTree([{ field: 'path', operator: 'startsWith', value: '/my-org/project-a' }]),
+      createdAt: 1,
+      updatedAt: 1
+    }
+  ]
+});
+const mixedGithubTabs = [
+  { id: 451, title: '项目仓库', url: 'https://github.com/my-org/project-a', active: false, pinned: false, index: 0 },
+  { id: 452, title: '普通仓库', url: 'https://github.com/other-org/other', active: false, pinned: false, index: 1 }
+];
+const domainKeyCustomTitleSnapshots = backgroundSandbox.buildTabSnapshots(mixedGithubTabs, domainKeyCustomTitleSettings);
+assert.deepStrictEqual(Array.from(domainKeyCustomTitleSnapshots, (tab) => tab.groupKey), ['github.com', 'github.com']);
+assert.deepStrictEqual(Array.from(domainKeyCustomTitleSnapshots, (tab) => tab.groupTitle), ['代码仓库', '代码仓库']);
+
+const domainKeyCustomTitleSummaries = backgroundSandbox.buildGroupSummaries(mixedGithubTabs, domainKeyCustomTitleSettings);
+assert.strictEqual(domainKeyCustomTitleSummaries.length, 1);
+assert.strictEqual(domainKeyCustomTitleSummaries[0].groupKey, 'github.com');
+assert.strictEqual(domainKeyCustomTitleSummaries[0].title, '代码仓库');
+
+const domainKeyCustomTitleGroupSnapshots = backgroundSandbox.buildGroupSnapshots(domainKeyCustomTitleSnapshots);
+assert.strictEqual(domainKeyCustomTitleGroupSnapshots[0].groupKey, 'github.com');
+assert.strictEqual(domainKeyCustomTitleGroupSnapshots[0].title, '代码仓库');
+
+const laterMatchedDomainKeyThresholdSettings = backgroundSandbox.normalizeSettings({
+  minTabsPerGroup: 3,
+  priorityGroups: [],
+  groupRules: [
+    {
+      id: 'rule-github-threshold',
+      name: '代码仓库阈值规则',
+      enabled: true,
+      targetGroupKey: 'github.com',
+      targetTitle: '代码仓库',
+      minTabsPerGroup: 1,
+      conditionTree: makeConditionTree([{ field: 'path', operator: 'startsWith', value: '/my-org/project-a' }]),
+      createdAt: 1,
+      updatedAt: 1
+    }
+  ]
+});
+const laterMatchedDomainKeyThresholdSummaries = backgroundSandbox.buildGroupSummaries([
+  { id: 461, title: '普通仓库', url: 'https://github.com/other-org/other', active: false, pinned: false, index: 0 },
+  { id: 462, title: '项目仓库', url: 'https://github.com/my-org/project-a', active: false, pinned: false, index: 1 }
+], laterMatchedDomainKeyThresholdSettings);
+assert.strictEqual(laterMatchedDomainKeyThresholdSummaries.length, 1);
+assert.strictEqual(laterMatchedDomainKeyThresholdSummaries[0].groupKey, 'github.com');
+assert.strictEqual(laterMatchedDomainKeyThresholdSummaries[0].title, '代码仓库');
+
+const mixedRuleOrganizedTabs = backgroundSandbox.buildOrganizedTabs([
+  { id: 471, title: '普通仓库', url: 'https://github.com/other-org/other', active: false, pinned: false, index: 0 },
+  { id: 472, title: '其他项目', url: 'https://jira.example.com/browse/ONE', active: false, pinned: false, index: 1 },
+  { id: 473, title: '项目仓库', url: 'https://github.com/my-org/project-a', active: false, pinned: false, index: 2 }
+], backgroundSandbox.normalizeSettings({
+  minTabsPerGroup: 3,
+  priorityGroups: [],
+  groupRules: [
+    {
+      id: 'rule-github-path',
+      name: '代码仓库规则',
+      enabled: true,
+      targetGroupKey: 'github.com',
+      targetTitle: '代码仓库',
+      minTabsPerGroup: null,
+      conditionTree: makeConditionTree([{ field: 'path', operator: 'startsWith', value: '/my-org/project-a' }]),
+      createdAt: 1,
+      updatedAt: 1
+    },
+    {
+      id: 'rule-jira-project',
+      name: '其他项目规则',
+      enabled: true,
+      targetGroupKey: 'custom:其他项目',
+      targetTitle: '其他项目',
+      minTabsPerGroup: null,
+      conditionTree: makeConditionTree([{ field: 'hostname', operator: 'contains', value: 'jira.example.com' }]),
+      createdAt: 2,
+      updatedAt: 2
+    }
+  ]
+}));
+const mixedRuleOrganizedIds = Array.from(mixedRuleOrganizedTabs, (tab) => tab.id);
+const firstGithubPosition = mixedRuleOrganizedIds.indexOf(471);
+const secondGithubPosition = mixedRuleOrganizedIds.indexOf(473);
+assert.strictEqual(Math.abs(firstGithubPosition - secondGithubPosition), 1);
+
+const customAndDomainGroupedOrderTabs = backgroundSandbox.buildOrganizedTabs([
+  { id: 481, title: '普通一', url: 'https://zeta.example.com/a', active: false, pinned: false, index: 0 },
+  { id: 482, title: '自定义一', url: 'https://alpha.example.com/a', active: false, pinned: false, index: 1 },
+  { id: 483, title: '普通二', url: 'https://zeta.example.com/b', active: false, pinned: false, index: 2 },
+  { id: 484, title: '自定义二', url: 'https://beta.example.com/b', active: false, pinned: false, index: 3 }
+], backgroundSandbox.normalizeSettings({
+  minTabsPerGroup: 2,
+  priorityGroups: [],
+  groupRules: [
+    {
+      id: 'rule-custom-order',
+      name: '自定义排序规则',
+      enabled: true,
+      targetGroupKey: 'custom:排序分组',
+      targetTitle: '排序分组',
+      minTabsPerGroup: null,
+      conditionTree: makeConditionTree([{ field: 'title', operator: 'contains', value: '自定义' }]),
+      createdAt: 1,
+      updatedAt: 1
+    }
+  ]
+}));
+assert.deepStrictEqual(Array.from(customAndDomainGroupedOrderTabs, (tab) => tab.id).slice(0, 2), [481, 483]);
+
+const customHostnameSortedTabs = backgroundSandbox.buildOrganizedTabs([
+  { id: 491, title: '乙', url: 'https://b.example.com/a', active: false, pinned: false, index: 0 },
+  { id: 492, title: '甲', url: 'https://a.example.com/a', active: false, pinned: false, index: 1 }
+], backgroundSandbox.normalizeSettings({
+  minTabsPerGroup: 3,
+  priorityGroups: [],
+  groupRules: [
+    {
+      id: 'rule-custom-hostname',
+      name: '同组主机排序规则',
+      enabled: true,
+      targetGroupKey: 'custom:同组主机',
+      targetTitle: '同组主机',
+      minTabsPerGroup: null,
+      conditionTree: makeConditionTree([{ field: 'hostname', operator: 'contains', value: 'example.com' }]),
+      createdAt: 1,
+      updatedAt: 1
+    }
+  ]
+}));
+assert.deepStrictEqual(Array.from(customHostnameSortedTabs, (tab) => tab.id), [492, 491]);
 
 const samePrimaryDomainUrls = [
   'https://mail.google.com/inbox',
@@ -292,8 +1021,17 @@ vm.runInContext(fs.readFileSync(popupPath, 'utf8'), popupSandbox, { filename: 'p
 
 assert.strictEqual(popupSandbox.getVisibleTabsFromState, undefined);
 assert.strictEqual(popupSandbox.formatRecentAccessTime, undefined);
+assert.strictEqual(typeof popupSandbox.formatGroupRuleThresholdText, 'function');
+assert.strictEqual(popupSandbox.formatGroupRuleThresholdText(null, 2), '使用全局阈值：至少 2 个标签');
+assert.strictEqual(popupSandbox.formatGroupRuleThresholdText(1, 2), '规则阈值：至少 1 个标签');
+assert.strictEqual(typeof popupSandbox.createDefaultGroupRuleDraft, 'function');
+assert.strictEqual(popupSandbox.createDefaultGroupRuleDraft().enabled, true);
+assert.strictEqual(popupSandbox.createDefaultGroupRuleDraft().conditionTree.type, 'group');
+assert.strictEqual(popupSandbox.createDefaultGroupRuleDraft().conditionTree.logic, 'and');
+assert.strictEqual(popupSandbox.createDefaultGroupRuleDraft().conditionTree.children[0].type, 'condition');
 
 const popupHtml = fs.readFileSync(path.join(rootDir, 'popup.html'), 'utf8');
+const popupCssContent = fs.readFileSync(path.join(rootDir, 'popup.css'), 'utf8');
 const readmeContent = fs.readFileSync(path.join(rootDir, 'README.md'), 'utf8');
 const usageSvgContent = fs.readFileSync(path.join(rootDir, 'assets/插件使用页面标注.svg'), 'utf8');
 
@@ -314,6 +1052,24 @@ assert.ok(popupHtml.includes('默认快捷键'));
 assert.ok(popupHtml.includes('⌘⇧Y'));
 assert.ok(popupHtml.includes('Ctrl Shift Y'));
 assert.ok(popupHtml.includes('不会直接关闭'));
+assert.ok(popupHtml.includes('groupRuleList'));
+assert.ok(popupHtml.includes('groupRuleForm'));
+assert.ok(popupHtml.includes('groupRuleFormStatus'));
+assert.ok(popupHtml.includes('新增分组规则'));
+assert.ok(popupHtml.includes('留空使用全局阈值'));
+assert.ok(popupHtml.includes('当前全局'));
+assert.ok(popupHtml.includes('启用此规则'));
+assert.ok(!popupHtml.includes('保存后参与整理规则'));
+assert.ok(popupHtml.includes('addRuleGroupButton'));
+assert.ok(popupHtml.includes('条件组'));
+assert.ok(popupHtml.includes('满足全部'));
+assert.ok(popupHtml.includes('满足任一'));
+assert.ok(popupCssContent.includes('.group-rule-form'));
+assert.ok(popupCssContent.includes('.condition-row'));
+assert.ok(popupCssContent.includes('.condition-group'));
+assert.ok(popupCssContent.includes('.condition-group-child'));
+assert.ok(popupCssContent.includes('.group-rule-item'));
+assert.ok(popupCssContent.includes('.rule-form-status.is-error'));
 assert.ok(!popupHtml.includes('searchInput'));
 assert.ok(!popupHtml.includes('searchResultList'));
 assert.ok(!popupHtml.includes('搜索已打开标签'));
@@ -321,6 +1077,13 @@ assert.ok(!popupHtml.includes('快速切换'));
 assert.ok(!popupHtml.includes('最近使用'));
 assert.ok(readmeContent.includes('一键理顺满屏标签'));
 assert.ok(readmeContent.includes('分组规则是插件的核心能力'));
+assert.ok(readmeContent.includes('自定义分组规则'));
+assert.ok(readmeContent.includes('规则阈值'));
+assert.ok(readmeContent.includes('留空使用全局阈值'));
+assert.ok(readmeContent.includes('条件组'));
+assert.ok(readmeContent.includes('满足全部'));
+assert.ok(readmeContent.includes('满足任一'));
+assert.ok(readmeContent.includes('多个域名'));
 assert.ok(readmeContent.includes('点击“整理当前窗口”'));
 assert.ok(!readmeContent.includes('快速找回想看的页面'));
 assert.ok(!readmeContent.includes('搜索框会自动聚焦'));
@@ -365,6 +1128,404 @@ async function runAsyncChecks() {
   assert.deepStrictEqual(groupOperations.grouped, [[21, 22, 23]]);
   assert.deepStrictEqual(groupOperations.ungrouped, [[31], [41]]);
   assert.strictEqual(groupOperations.updated[0].options.title, 'google');
+
+  groupOperations.grouped = [];
+  groupOperations.ungrouped = [];
+  groupOperations.updated = [];
+  backgroundSandbox.queryCurrentWindowTabs = async () => [
+    { id: 61, title: '仓库', url: 'https://github.com/my-org/project-a', pinned: false, groupId: -1 },
+    { id: 62, title: '文档', url: 'https://docs.example.com/project-a', pinned: false, groupId: -1 }
+  ];
+
+  await backgroundSandbox.reconcileCurrentWindowGroups({
+    minTabsPerGroup: 3,
+    priorityGroups: [],
+    groupRules: [
+      {
+        id: 'rule-project-a-github',
+        name: '项目 A 仓库',
+        enabled: true,
+        targetGroupKey: 'custom:项目 A',
+        targetTitle: '项目 A',
+        minTabsPerGroup: 1,
+        conditionTree: makeConditionTree([{ field: 'hostname', operator: 'contains', value: 'github.com' }]),
+        createdAt: 1,
+        updatedAt: 1
+      },
+      {
+        id: 'rule-project-a-doc',
+        name: '项目 A 文档',
+        enabled: true,
+        targetGroupKey: 'custom:项目 A',
+        targetTitle: '项目 A',
+        minTabsPerGroup: null,
+        conditionTree: makeConditionTree([{ field: 'hostname', operator: 'contains', value: 'docs.example.com' }]),
+        createdAt: 2,
+        updatedAt: 2
+      }
+    ]
+  });
+  assert.deepStrictEqual(groupOperations.grouped, [[61, 62]]);
+  assert.deepStrictEqual(groupOperations.ungrouped, []);
+  assert.strictEqual(groupOperations.updated[0].options.title, '项目 A');
+
+  groupOperations.grouped = [];
+  groupOperations.ungrouped = [];
+  groupOperations.updated = [];
+  backgroundSandbox.queryCurrentWindowTabs = async () => [
+    { id: 71, title: '固定冲突', url: 'https://one.foo.net/a', pinned: true, groupId: 7 },
+    { id: 72, title: '工作页一', url: 'https://a.foo.com/a', pinned: false, groupId: -1 },
+    { id: 73, title: '工作页二', url: 'https://b.foo.com/b', pinned: false, groupId: -1 }
+  ];
+
+  await backgroundSandbox.reconcileCurrentWindowGroups({
+    minTabsPerGroup: 2,
+    priorityGroups: [],
+    groupRules: []
+  });
+  assert.deepStrictEqual(groupOperations.grouped, [[72, 73]]);
+  assert.strictEqual(groupOperations.updated[0].options.title, 'foo');
+
+  groupOperations.grouped = [];
+  groupOperations.updated = [];
+  await backgroundSandbox.regroupRestoredTabs([
+    { id: 81, title: '固定冲突', url: 'https://one.foo.net/a', pinned: true, index: 0 },
+    { id: 82, title: '工作页一', url: 'https://a.foo.com/a', pinned: false, index: 1 },
+    { id: 83, title: '工作页二', url: 'https://b.foo.com/b', pinned: false, index: 2 }
+  ], {
+    minTabsPerGroup: 2,
+    priorityGroups: [],
+    groupRules: []
+  });
+  assert.deepStrictEqual(groupOperations.grouped, [[82, 83]]);
+  assert.strictEqual(groupOperations.updated[0].options.title, 'foo');
+
+  const restoreOperations = {
+    tabUpdates: [],
+    createdTabs: [],
+    grouped: []
+  };
+  backgroundSandbox.chrome.storage = {
+    local: {
+      get: async () => ({
+        'tabgod.sessions': [
+          {
+            id: 'session-pinned-first',
+            name: '固定首个标签工作集',
+            createdAt: 1,
+            updatedAt: 1,
+            activeUrl: 'https://github.com/other',
+            tabs: [
+              {
+                id: 901,
+                title: '固定仓库',
+                url: 'https://github.com/pinned',
+                pinned: true,
+                active: false,
+                index: 0
+              },
+              {
+                id: 902,
+                title: '普通仓库',
+                url: 'https://github.com/other',
+                pinned: false,
+                active: true,
+                index: 1
+              }
+            ],
+            groups: []
+          }
+        ],
+        'tabgod.settings': {
+          minTabsPerGroup: 1,
+          priorityGroups: [],
+          groupRules: []
+        }
+      })
+    }
+  };
+  backgroundSandbox.chrome.windows = {
+    create: async ({ url, focused }) => ({
+      id: 900,
+      tabs: [{ id: 911, title: '固定仓库', url, pinned: false, active: true, index: 0, windowId: 900 }],
+      focused
+    })
+  };
+  backgroundSandbox.chrome.tabs = {
+    create: async (options) => {
+      const createdTab = Object.assign({ id: 912, title: '普通仓库', index: 1, windowId: 900 }, options);
+      restoreOperations.createdTabs.push(createdTab);
+      return createdTab;
+    },
+    update: async (tabId, options) => {
+      restoreOperations.tabUpdates.push({ tabId, options });
+      return Object.assign({ id: tabId }, options);
+    },
+    group: async ({ tabIds }) => {
+      restoreOperations.grouped.push(Array.from(tabIds));
+      return 90;
+    }
+  };
+  backgroundSandbox.chrome.tabGroups = {
+    update: async () => undefined
+  };
+
+  await backgroundSandbox.restoreSession('session-pinned-first', { newWindow: true });
+  assert.ok(restoreOperations.tabUpdates.some((item) => {
+    return item.tabId === 911 && item.options.pinned === true;
+  }));
+  assert.deepStrictEqual(restoreOperations.grouped, [[912]]);
+
+  const storedState = {
+    'tabgod.settings': backgroundSandbox.normalizeSettings({
+      minTabsPerGroup: 2,
+      priorityGroups: [],
+      groupRules: []
+    })
+  };
+
+  backgroundSandbox.chrome.storage = {
+    local: {
+      get: async (keys) => {
+        const result = {};
+        keys.forEach((key) => {
+          result[key] = storedState[key];
+        });
+        return result;
+      },
+      set: async (values) => {
+        Object.assign(storedState, values);
+      }
+    }
+  };
+  // 规则消息只验证设置写入，不需要真实浏览器标签；空列表可避免整理当前窗口时依赖外部状态。
+  backgroundSandbox.queryCurrentWindowTabs = async () => [];
+  backgroundSandbox.chrome.tabs = {
+    group: async () => {
+      throw new Error('规则管理校验不应创建浏览器分组');
+    },
+    ungroup: async () => {
+      throw new Error('规则管理校验不应解散浏览器分组');
+    }
+  };
+  backgroundSandbox.chrome.tabGroups = {
+    update: async () => {
+      throw new Error('规则管理校验不应更新浏览器分组');
+    }
+  };
+
+  await assert.rejects(
+    () => backgroundSandbox.handleMessage({
+      action: 'create-group-rule'
+    }),
+    /分组规则不能为空/
+  );
+
+  await assert.rejects(
+    () => backgroundSandbox.handleMessage({
+      action: 'create-group-rule',
+      rule: {
+        name: '空目标',
+        targetTitle: '',
+        conditionTree: makeConditionTree([{ field: 'hostname', operator: 'contains', value: 'github.com' }])
+      }
+    }),
+    /目标分组名不能为空/
+  );
+
+  await assert.rejects(
+    () => backgroundSandbox.handleMessage({
+      action: 'create-group-rule',
+      rule: {
+        name: '空条件',
+        targetTitle: '空条件',
+        conditionTree: makeConditionTree([{ field: 'hostname', operator: 'contains', value: '' }])
+      }
+    }),
+    /至少需要一个匹配条件/
+  );
+
+  const createdRuleResult = await backgroundSandbox.handleMessage({
+    action: 'create-group-rule',
+    rule: {
+      name: '',
+      targetTitle: '项目 A',
+      minTabsPerGroup: '',
+      conditionTree: {
+        type: 'group',
+        logic: 'or',
+        children: [
+          { type: 'condition', field: 'hostname', operator: 'contains', value: 'github.com' },
+          { type: 'condition', field: 'hostname', operator: 'contains', value: 'docs.example.com' }
+        ]
+      }
+    }
+  });
+  assert.strictEqual(createdRuleResult.rule.name, '项目 A');
+  assert.strictEqual(createdRuleResult.rule.targetGroupKey, 'custom:项目 A');
+  assert.strictEqual(createdRuleResult.rule.minTabsPerGroup, null);
+  assert.strictEqual(createdRuleResult.rule.conditionTree.logic, 'or');
+  assert.strictEqual(createdRuleResult.rule.conditionTree.children.length, 2);
+  assert.strictEqual(createdRuleResult.rule.conditions, undefined);
+  assert.strictEqual(createdRuleResult.settings.groupRules.length, 1);
+
+  await assert.rejects(
+    () => backgroundSandbox.handleMessage({
+      action: 'update-group-rule',
+      ruleId: createdRuleResult.rule.id,
+      rule: {
+        name: ''
+      }
+    }),
+    /规则名称不能为空/
+  );
+
+  const updatedRuleResult = await backgroundSandbox.handleMessage({
+    action: 'update-group-rule',
+    ruleId: createdRuleResult.rule.id,
+    rule: {
+      enabled: false,
+      minTabsPerGroup: 1,
+      targetGroupKey: 'custom:非法改名'
+    }
+  });
+  assert.strictEqual(updatedRuleResult.rule.enabled, false);
+  assert.strictEqual(updatedRuleResult.rule.minTabsPerGroup, 1);
+  assert.strictEqual(updatedRuleResult.rule.targetGroupKey, 'custom:项目 A');
+
+  const secondRuleResult = await backgroundSandbox.handleMessage({
+    action: 'create-group-rule',
+    rule: {
+      name: '项目 B',
+      targetTitle: '项目 B',
+      conditionTree: makeConditionTree([{ field: 'hostname', operator: 'contains', value: 'gitlab.com' }])
+    }
+  });
+  assert.deepStrictEqual(
+    storedState['tabgod.settings'].groupRules.map((rule) => rule.id),
+    [createdRuleResult.rule.id, secondRuleResult.rule.id]
+  );
+
+  const moveSecondUpResult = await backgroundSandbox.handleMessage({
+    action: 'move-group-rule',
+    ruleId: secondRuleResult.rule.id,
+    direction: 'up'
+  });
+  assert.strictEqual(moveSecondUpResult.moved, true);
+  assert.deepStrictEqual(
+    moveSecondUpResult.settings.groupRules.map((rule) => rule.id),
+    [secondRuleResult.rule.id, createdRuleResult.rule.id]
+  );
+
+  const moveSecondUpBoundaryResult = await backgroundSandbox.handleMessage({
+    action: 'move-group-rule',
+    ruleId: secondRuleResult.rule.id,
+    direction: 'up'
+  });
+  assert.strictEqual(moveSecondUpBoundaryResult.moved, false);
+
+  const moveSecondDownResult = await backgroundSandbox.handleMessage({
+    action: 'move-group-rule',
+    ruleId: secondRuleResult.rule.id,
+    direction: 'down'
+  });
+  assert.strictEqual(moveSecondDownResult.moved, true);
+  assert.deepStrictEqual(
+    moveSecondDownResult.settings.groupRules.map((rule) => rule.id),
+    [createdRuleResult.rule.id, secondRuleResult.rule.id]
+  );
+
+  const movedRuleResult = await backgroundSandbox.handleMessage({
+    action: 'move-group-rule',
+    ruleId: createdRuleResult.rule.id,
+    direction: 'up'
+  });
+  assert.strictEqual(movedRuleResult.moved, false);
+  assert.strictEqual(movedRuleResult.settings.groupRules.length, 2);
+
+  await assert.rejects(
+    () => backgroundSandbox.handleMessage({
+      action: 'move-group-rule',
+      ruleId: 'missing-rule',
+      direction: 'up'
+    }),
+    /没有找到要移动的分组规则/
+  );
+
+  await assert.rejects(
+    () => backgroundSandbox.handleMessage({
+      action: 'delete-group-rule',
+      ruleId: 'missing-rule'
+    }),
+    /没有找到要删除的分组规则/
+  );
+
+  const deletedSecondRuleResult = await backgroundSandbox.handleMessage({
+    action: 'delete-group-rule',
+    ruleId: secondRuleResult.rule.id
+  });
+  assert.strictEqual(deletedSecondRuleResult.settings.groupRules.length, 1);
+
+  const deletedRuleResult = await backgroundSandbox.handleMessage({
+    action: 'delete-group-rule',
+    ruleId: createdRuleResult.rule.id
+  });
+  assert.strictEqual(deletedRuleResult.settings.groupRules.length, 0);
+
+  const updateSettingsStoredState = {
+    'tabgod.settings': backgroundSandbox.normalizeSettings({
+      minTabsPerGroup: 3,
+      priorityGroups: [],
+      groupRules: []
+    })
+  };
+  const updateSettingsOperations = {
+    grouped: [],
+    ungrouped: [],
+    updated: []
+  };
+
+  backgroundSandbox.chrome.storage = {
+    local: {
+      get: async (keys) => {
+        const result = {};
+        keys.forEach((key) => {
+          result[key] = updateSettingsStoredState[key];
+        });
+        return result;
+      },
+      set: async (values) => {
+        Object.assign(updateSettingsStoredState, values);
+      }
+    }
+  };
+  backgroundSandbox.queryCurrentWindowTabs = async () => [
+    { id: 1001, title: '项目一', url: 'https://solo.example.com/a', pinned: false, groupId: -1 }
+  ];
+  backgroundSandbox.chrome.tabs = {
+    group: async ({ tabIds }) => {
+      updateSettingsOperations.grouped.push(Array.from(tabIds));
+      return 100;
+    },
+    ungroup: async (tabIds) => {
+      updateSettingsOperations.ungrouped.push(Array.from(tabIds));
+    }
+  };
+  backgroundSandbox.chrome.tabGroups = {
+    update: async (groupId, options) => {
+      updateSettingsOperations.updated.push({ groupId, options });
+    }
+  };
+
+  const updateSettingsResult = await backgroundSandbox.handleMessage({
+    action: 'update-settings',
+    settings: {
+      minTabsPerGroup: 1
+    }
+  });
+  assert.strictEqual(updateSettingsResult.settings.minTabsPerGroup, 1);
+  assert.strictEqual(updateSettingsStoredState['tabgod.settings'].minTabsPerGroup, 1);
+  assert.deepStrictEqual(updateSettingsOperations.grouped, [[1001]]);
 }
 
 runAsyncChecks()

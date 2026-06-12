@@ -9,28 +9,31 @@
   <body>
     <main class="popup-shell">
       <header class="popup-header">
-        <div>
-          <h1>一键整理</h1>
+        <div class="popup-title-block">
+          <div class="popup-title-row">
+            <h1>一键整理</h1>
+            <span class="popup-shortcut-pill" aria-label="打开弹窗快捷键：⌘ Shift L 或 Ctrl Shift L">
+              <span>打开</span>
+              <kbd>⌘⇧L</kbd>
+              <span>/</span>
+              <kbd>Ctrl Shift L</kbd>
+            </span>
+          </div>
           <p id="summaryText">把当前窗口整理成清晰分组</p>
-          <p class="helper-text popup-shortcut-helper">
-            <span>打开弹窗</span>
-            <kbd>⌘⇧L</kbd>
-            <span>/</span>
-            <kbd>Ctrl Shift L</kbd>
-          </p>
         </div>
       </header>
 
       <label class="search-box quick-search-box">
         <span>搜索已打开标签</span>
-        <input id="searchInput" type="search" placeholder="输入标题、网址或分组名" autocomplete="off" aria-describedby="searchShortcutHint">
-        <span id="searchShortcutHint" class="helper-text search-helper-text">
-          <span>点击打开</span>
-          <span class="hint-separator" aria-hidden="true"></span>
-          <kbd>↑↓</kbd>
-          <span>选择</span>
-          <kbd>Enter</kbd>
-          <span>跳转</span>
+        <span class="search-control-frame">
+          <input id="searchInput" type="search" placeholder="输入标题、网址或分组名" autocomplete="off" aria-describedby="searchShortcutHint">
+          <span id="searchShortcutHint" class="helper-text search-helper-text">
+            <kbd>↑↓</kbd>
+            <span>选择</span>
+            <span class="hint-separator" aria-hidden="true"></span>
+            <kbd>Enter</kbd>
+            <span>跳转</span>
+          </span>
         </span>
       </label>
 
@@ -48,18 +51,19 @@
       </section>
 
       <section class="quick-action-area" aria-label="常用操作">
-        <button id="organizeButton" class="primary-action main-organize-action" type="button">整理当前窗口</button>
+        <button id="organizeButton" class="primary-action main-organize-action" type="button">
+          <span class="main-action-label">整理当前窗口</span>
+          <span class="main-action-shortcut" aria-label="默认快捷键：⌘ Shift Y 或 Ctrl Shift Y">
+            <kbd>⌘⇧Y</kbd>
+            <span>/</span>
+            <kbd>Ctrl Shift Y</kbd>
+          </span>
+        </button>
         <div class="secondary-action-grid" aria-label="当前窗口辅助操作">
           <button id="scanDuplicatesButton" type="button" title="智能去重会先确认，不会直接关闭。">智能去重</button>
           <button id="saveWorkspaceButton" type="button">保存工作集</button>
         </div>
         <div class="quick-action-footer">
-          <p class="helper-text action-helper-text">
-            <span>默认快捷键</span>
-            <kbd>⌘⇧Y</kbd>
-            <span>/</span>
-            <kbd>Ctrl Shift Y</kbd>
-          </p>
           <button id="moreToolsButton" class="management-toggle-button" type="button" aria-expanded="false" aria-controls="moreToolsSection">高级管理</button>
         </div>
       </section>

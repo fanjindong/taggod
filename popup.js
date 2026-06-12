@@ -1,4 +1,5 @@
 const state = {
+  tabs: [],
   groups: [],
   sessions: [],
   settings: {
@@ -20,6 +21,8 @@ const state = {
   },
   // 保存后只记录本次标签编号，用户明确点击后才关闭，避免保存动作变成隐式清场。
   lastSavedTabIds: [],
+  query: '',
+  selectedIndex: 0,
   moreToolsVisible: false,
   ruleEditor: {
     // 表单状态放在前端本地，原因是未保存草稿不应污染 chrome.storage。
@@ -28,6 +31,9 @@ const state = {
     draft: null
   }
 };
+
+// 默认态只渲染最近 30 条，原因是首开弹窗要快；更多页面可通过搜索直接定位。
+const DEFAULT_RECENT_RESULT_LIMIT = 30;
 
 function sendMessage(action, payload = {}) {
   return chrome.runtime.sendMessage(Object.assign({ action }, payload)).then((response) => {
@@ -49,16 +55,18 @@ async function loadState(options = {}) {
 
   try {
     const data = await sendMessage('get-state');
+    state.tabs = data.tabs || [];
     state.groups = data.groups || [];
     state.sessions = data.sessions || [];
     state.settings = data.settings || state.settings;
     state.overview = data.overview || state.overview;
+    state.selectedIndex = clampSelectedIndex(state.selectedIndex, getVisibleTabsFromState(state).length);
     render();
 
     if (options.keepMoreToolsFocus) {
       focusMoreTools();
     } else {
-      focusPrimaryAction();
+      focusSearchInput();
     }
 
     if (!options.keepStatus) {
@@ -100,6 +108,13 @@ function bindEvents() {
     state.duplicateReview.selectedGroupKeys = [];
     renderDuplicateReview();
   });
+  document.getElementById('searchInput').addEventListener('input', (event) => {
+    state.query = event.target.value.trim().toLowerCase();
+    state.selectedIndex = 0;
+    renderOverview();
+    renderTabs();
+  });
+  document.getElementById('searchInput').addEventListener('keydown', handleSearchKeydown);
   document.getElementById('moreToolsButton').addEventListener('click', toggleMoreTools);
   document.getElementById('newGroupRuleButton').addEventListener('click', openNewGroupRuleForm);
   document.getElementById('groupRuleForm').addEventListener('submit', saveGroupRule);
@@ -112,15 +127,17 @@ function bindEvents() {
   document.getElementById('groupRuleEnabledInput').addEventListener('change', updateRuleDraftFromForm);
 }
 
-async function runAction(action, payload = {}) {
+async function runAction(action, payload = {}, options = {}) {
   setBusy(true);
 
   try {
     const result = await sendMessage(action, payload);
     setStatus(formatActionResult(action, result));
 
-    // 操作后的刷新不能覆盖结果提示，否则用户看不到批量操作到底处理了多少标签。
-    await loadState({ keepStatus: true });
+    if (options.refresh !== false) {
+      // 操作后的刷新不能覆盖结果提示，否则用户看不到批量操作到底处理了多少标签。
+      await loadState(Object.assign({ keepStatus: true }, options.loadStateOptions || {}));
+    }
   } catch (error) {
     setStatus(error.message || '操作失败');
   } finally {
@@ -179,6 +196,45 @@ async function closeSelectedDuplicates() {
     setStatus(error.message || '关闭重复标签失败');
   } finally {
     setBusy(false);
+  }
+}
+
+async function activateSearchResult(tabId) {
+  if (!Number.isInteger(tabId)) {
+    setStatus('目标标签无效');
+    return;
+  }
+
+  await runAction('activate-tab', { tabId });
+}
+
+function handleSearchKeydown(event) {
+  const visibleTabs = getVisibleTabs();
+
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    state.selectedIndex = clampSelectedIndex(state.selectedIndex + 1, visibleTabs.length);
+    renderTabs();
+    return;
+  }
+
+  if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    state.selectedIndex = clampSelectedIndex(state.selectedIndex - 1, visibleTabs.length);
+    renderTabs();
+    return;
+  }
+
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    const selectedTab = visibleTabs[clampSelectedIndex(state.selectedIndex, visibleTabs.length)];
+
+    if (!selectedTab) {
+      setStatus('没有可切换的标签页');
+      return;
+    }
+
+    activateSearchResult(selectedTab.id);
   }
 }
 
@@ -264,7 +320,7 @@ async function saveWorkspace() {
     state.lastSavedTabIds = result.savedTabIds || [];
     state.moreToolsVisible = true;
     setStatus(`已保存 ${result.savedCount} 个标签，可选择关闭已保存标签`);
-    await loadState({ keepStatus: true });
+    await loadState({ keepStatus: true, keepMoreToolsFocus: true });
   } catch (error) {
     setStatus(error.message || '保存工作集失败');
   } finally {
@@ -284,7 +340,7 @@ async function closeLastSavedTabs() {
     const result = await sendMessage('close-saved-tabs', { tabIds: state.lastSavedTabIds });
     state.lastSavedTabIds = [];
     setStatus(`已关闭 ${result.closedCount} 个已保存标签，失败 ${result.failedCount || 0} 个`);
-    await loadState({ keepStatus: true });
+    await loadState({ keepStatus: true, keepMoreToolsFocus: true });
   } catch (error) {
     setStatus(error.message || '关闭已保存标签失败');
   } finally {
@@ -312,16 +368,17 @@ function render() {
   renderGroupRuleForm();
   renderGroups();
   renderDuplicateReview();
+  renderTabs();
   renderSessions();
   renderMoreTools();
 }
 
-function focusPrimaryAction() {
-  const organizeButton = document.getElementById('organizeButton');
+function focusSearchInput() {
+  const searchInput = document.getElementById('searchInput');
 
-  if (organizeButton && typeof organizeButton.focus === 'function') {
-    // 弹窗打开的主任务就是整理当前窗口，焦点放在主按钮能减少一次点击。
-    organizeButton.focus();
+  if (searchInput && typeof searchInput.focus === 'function') {
+    // 弹窗打开后通常先找已有页面，自动聚焦可以减少一次无意义点击。
+    searchInput.focus();
   }
 }
 
@@ -417,13 +474,13 @@ function formatGroupRuleSummary(rule) {
 }
 
 function renderOverview() {
-  const tabCount = state.overview.tabCount || 0;
-  const domainCount = state.overview.domainCount || 0;
+  const allTabCount = state.overview.allTabCount || state.overview.tabCount || 0;
+  const windowCount = state.overview.windowCount || 1;
   const duplicateCount = state.overview.duplicateCount;
 
-  document.getElementById('quickStatusText').textContent = `${tabCount} 个标签 · ${domainCount} 个主域名`;
+  document.getElementById('quickStatusText').textContent = `${allTabCount} 个标签 · ${windowCount} 个窗口`;
   document.getElementById('duplicateHintText').textContent = Number.isFinite(duplicateCount) && duplicateCount > 0 ? `${duplicateCount} 个重复` : '';
-  document.getElementById('summaryText').textContent = '把当前窗口整理成清晰分组';
+  document.getElementById('summaryText').textContent = state.query ? '搜索所有已打开标签' : '搜索切换，或一键整理当前窗口';
 }
 
 function renderGroupRules() {
@@ -764,8 +821,8 @@ async function saveGroupRule(event) {
     state.settings = result.settings || state.settings;
     setRuleFormStatus(`已保存分组规则：${rule.name || rule.targetTitle}`);
     closeGroupRuleForm();
+    renderGroupRules();
     setStatus(`已保存分组规则：${rule.name || rule.targetTitle}`);
-    await loadState({ keepStatus: true, keepMoreToolsFocus: true });
   } catch (error) {
     setRuleFormStatus(error.message || '保存分组规则失败', { error: true });
     setStatus(error.message || '保存分组规则失败');
@@ -801,10 +858,13 @@ async function handleGroupRuleAction(action, ruleId) {
     return;
   }
 
+  if (action === 'move-rule-up' || action === 'move-rule-down') {
+    await moveGroupRuleWithoutReload(ruleId, action === 'move-rule-down' ? 'down' : 'up');
+    return;
+  }
+
   const messageMap = {
     'toggle-rule': ['update-group-rule', { ruleId, rule: { enabled: !rule.enabled } }],
-    'move-rule-up': ['move-group-rule', { ruleId, direction: 'up' }],
-    'move-rule-down': ['move-group-rule', { ruleId, direction: 'down' }],
     'delete-rule': ['delete-group-rule', { ruleId }]
   };
   const [messageAction, payload] = messageMap[action] || [];
@@ -813,7 +873,27 @@ async function handleGroupRuleAction(action, ruleId) {
     return;
   }
 
-  await runAction(messageAction, payload);
+  await applyGroupRuleMutationWithoutReload(messageAction, payload);
+}
+
+async function moveGroupRuleWithoutReload(ruleId, direction) {
+  await applyGroupRuleMutationWithoutReload('move-group-rule', { ruleId, direction });
+}
+
+async function applyGroupRuleMutationWithoutReload(action, payload) {
+  setBusy(true);
+
+  try {
+    const result = await sendMessage(action, payload);
+    state.settings = result.settings || state.settings;
+    renderGroupRules();
+    setStatus(formatActionResult(action, result));
+  } catch (error) {
+    setStatus(error.message || '更新分组规则失败');
+  } finally {
+    // 规则管理只影响规则列表显示，避免完整刷新把用户从高级管理区域带回搜索框。
+    setBusy(false);
+  }
 }
 
 function renderGroups() {
@@ -847,7 +927,9 @@ function renderGroups() {
 
   groupList.querySelectorAll('button[data-group-key]').forEach((button) => {
     button.addEventListener('click', () => {
-      runAction('toggle-priority-group', { groupKey: button.dataset.groupKey });
+      runAction('toggle-priority-group', { groupKey: button.dataset.groupKey }, {
+        loadStateOptions: { keepMoreToolsFocus: true }
+      });
     });
   });
 }
@@ -903,6 +985,53 @@ function renderDuplicateReview() {
   });
 }
 
+function renderTabs() {
+  const tabList = document.getElementById('searchResultList');
+  const visibleTabs = getVisibleTabs();
+  const selectedIndex = clampSelectedIndex(state.selectedIndex, visibleTabs.length);
+  state.selectedIndex = selectedIndex;
+  document.getElementById('visibleCount').textContent = `${visibleTabs.length} 个结果`;
+  document.getElementById('resultTitle').textContent = state.query ? '搜索结果' : '最近使用';
+  tabList.innerHTML = '';
+
+  if (visibleTabs.length === 0) {
+    tabList.appendChild(createEmptyState(state.query ? '没有匹配的已打开标签页' : '当前没有可切换的标签页'));
+    return;
+  }
+
+  visibleTabs.forEach((tab, index) => {
+    const item = document.createElement('button');
+    item.className = `tab-item quick-result-item${index === selectedIndex ? ' is-selected' : ''}`;
+    item.type = 'button';
+    item.dataset.action = 'activate';
+    item.dataset.tabId = String(tab.id);
+    const groupTitle = tab.groupTitle || tab.groupKey;
+    const windowLabel = tab.windowLabel || (tab.isCurrentWindow ? '当前窗口' : '其他窗口');
+    const accessLabel = formatRecentAccessTime(Number(tab.lastAccessedAt) || 0);
+    const metaText = accessLabel ? `${windowLabel} · ${accessLabel}` : windowLabel;
+    item.innerHTML = `
+      <span class="quick-result-main">
+        <span class="tab-title" title="${escapeHtml(tab.title)}">${escapeHtml(tab.title)}</span>
+        <span class="tab-url" title="${escapeHtml(tab.groupKey)} · ${escapeHtml(tab.url)}">${escapeHtml(groupTitle)} · ${escapeHtml(tab.url)}</span>
+      </span>
+      <span class="quick-result-meta">${escapeHtml(metaText)}</span>
+    `;
+    item.addEventListener('click', () => activateSearchResult(tab.id));
+    tabList.appendChild(item);
+  });
+
+  keepSelectedResultVisible(tabList);
+}
+
+function keepSelectedResultVisible(tabList) {
+  const selectedItem = tabList.querySelector('.quick-result-item.is-selected');
+
+  if (selectedItem && typeof selectedItem.scrollIntoView === 'function') {
+    // 键盘上下选择时列表本身不会自动滚动，这里只把高亮项滚进可视区域。
+    selectedItem.scrollIntoView({ block: 'nearest' });
+  }
+}
+
 function renderSessions() {
   const sessionList = document.getElementById('sessionList');
   sessionList.innerHTML = '';
@@ -947,12 +1076,16 @@ function renderSessions() {
 
 async function handleWorkspaceAction(action, sessionId) {
   if (action === 'restore') {
-    await runAction('restore-workspace', { workspaceId: sessionId });
+    await runAction('restore-workspace', { workspaceId: sessionId }, {
+      loadStateOptions: { keepMoreToolsFocus: true }
+    });
     return;
   }
 
   if (action === 'restore-new-window') {
-    await runAction('restore-workspace-new-window', { workspaceId: sessionId });
+    await runAction('restore-workspace-new-window', { workspaceId: sessionId }, {
+      loadStateOptions: { keepMoreToolsFocus: true }
+    });
     return;
   }
 
@@ -965,12 +1098,16 @@ async function handleWorkspaceAction(action, sessionId) {
       return;
     }
 
-    await runAction('rename-workspace', { workspaceId: sessionId, name });
+    await runAction('rename-workspace', { workspaceId: sessionId, name }, {
+      loadStateOptions: { keepMoreToolsFocus: true }
+    });
     return;
   }
 
   if (action === 'favorite') {
-    await runAction('toggle-workspace-favorite', { workspaceId: sessionId });
+    await runAction('toggle-workspace-favorite', { workspaceId: sessionId }, {
+      loadStateOptions: { keepMoreToolsFocus: true }
+    });
     return;
   }
 
@@ -982,7 +1119,9 @@ async function handleWorkspaceAction(action, sessionId) {
       return;
     }
 
-    await runAction('delete-workspace', { workspaceId: sessionId });
+    await runAction('delete-workspace', { workspaceId: sessionId }, {
+      loadStateOptions: { keepMoreToolsFocus: true }
+    });
   }
 }
 
@@ -997,6 +1136,181 @@ function formatTimestamp(timestamp) {
     hour: '2-digit',
     minute: '2-digit'
   }).format(new Date(timestamp));
+}
+
+function formatRecentAccessTime(timestamp, now = Date.now()) {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return '';
+  }
+
+  const elapsedMs = Math.max(0, now - timestamp);
+  // 这里用固定分钟换算，原因是最近使用只需要粗粒度提示，不需要精确到秒。
+  const minuteMs = 60 * 1000;
+
+  if (elapsedMs < minuteMs) {
+    return '刚刚';
+  }
+
+  const minutes = Math.floor(elapsedMs / minuteMs);
+
+  if (minutes < 60) {
+    return `${minutes} 分钟前`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+
+  if (hours < 24) {
+    return `${hours} 小时前`;
+  }
+
+  return '更早';
+}
+
+function normalizeSearchText(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getTabSearchText(tab) {
+  return [
+    tab.title,
+    tab.url,
+    tab.groupKey,
+    tab.groupTitle
+  ].map(normalizeSearchText).join(' ');
+}
+
+function getSearchMatchScore(tab, query) {
+  const normalizedQuery = normalizeSearchText(query);
+
+  if (!normalizedQuery) {
+    return 0;
+  }
+
+  const title = normalizeSearchText(tab.title);
+  const groupKey = normalizeSearchText(tab.groupKey);
+  const groupTitle = normalizeSearchText(tab.groupTitle);
+  const url = normalizeSearchText(tab.url);
+
+  if (title === normalizedQuery) {
+    return 400;
+  }
+
+  if (title.includes(normalizedQuery)) {
+    return 300;
+  }
+
+  if (groupTitle.includes(normalizedQuery) || groupKey.includes(normalizedQuery)) {
+    return 220;
+  }
+
+  if (url.includes(normalizedQuery)) {
+    return 100;
+  }
+
+  return 0;
+}
+
+function getRecentMatchScore(tab, now = Date.now()) {
+  const accessedAt = Number(tab && tab.lastAccessedAt) || 0;
+
+  if (!Number.isFinite(accessedAt) || accessedAt <= 0) {
+    return 0;
+  }
+
+  const elapsedMs = Math.max(0, now - accessedAt);
+  const minuteMs = 60 * 1000;
+
+  if (elapsedMs < minuteMs) {
+    // 搜索短词时，刚访问过的页面通常就是用户想切回的页面，需要能压过旧页面的普通标题命中。
+    return 260;
+  }
+
+  if (elapsedMs < 10 * minuteMs) {
+    return 180;
+  }
+
+  if (elapsedMs < 60 * minuteMs) {
+    return 100;
+  }
+
+  // 超过一小时的“最近”不再影响搜索排序，避免旧标签长期压过更精确的匹配。
+  return 0;
+}
+
+function getSearchRankingScore(tab, query, now = Date.now()) {
+  return getSearchMatchScore(tab, query) + getRecentMatchScore(tab, now);
+}
+
+function compareRecentTabs(left, right) {
+  const leftAccessedAt = Number(left.lastAccessedAt) || 0;
+  const rightAccessedAt = Number(right.lastAccessedAt) || 0;
+
+  if (leftAccessedAt !== rightAccessedAt) {
+    return rightAccessedAt - leftAccessedAt;
+  }
+
+  if (left.isCurrentWindow !== right.isCurrentWindow) {
+    return left.isCurrentWindow ? -1 : 1;
+  }
+
+  return (left.index || 0) - (right.index || 0);
+}
+
+function compareSearchTabs(left, right, query) {
+  const now = Date.now();
+  const leftScore = getSearchRankingScore(left, query, now);
+  const rightScore = getSearchRankingScore(right, query, now);
+
+  if (leftScore !== rightScore) {
+    return rightScore - leftScore;
+  }
+
+  const recentCompare = compareRecentTabs(left, right);
+
+  if (recentCompare !== 0) {
+    return recentCompare;
+  }
+
+  return (left.id || 0) - (right.id || 0);
+}
+
+function getVisibleTabsFromState(sourceState) {
+  const query = normalizeSearchText(sourceState.query);
+  const tabs = Array.isArray(sourceState.tabs) ? sourceState.tabs : [];
+
+  if (!query) {
+    return tabs
+      .filter((tab) => {
+        // 最近使用列表用于“切回别的页面”，当前窗口的当前标签继续展示会浪费首屏位置。
+        return !(tab.active && tab.isCurrentWindow);
+      })
+      .sort(compareRecentTabs)
+      .slice(0, DEFAULT_RECENT_RESULT_LIMIT);
+  }
+
+  return tabs
+    .filter((tab) => getSearchMatchScore(tab, query) > 0 || getTabSearchText(tab).includes(query))
+    .sort((left, right) => compareSearchTabs(left, right, query));
+}
+
+function clampSelectedIndex(index, total) {
+  if (total <= 0) {
+    return -1;
+  }
+
+  if (index < 0) {
+    return total - 1;
+  }
+
+  if (index >= total) {
+    return 0;
+  }
+
+  return index;
+}
+
+function getVisibleTabs() {
+  return getVisibleTabsFromState(state);
 }
 
 function createEmptyState(text) {
@@ -1057,6 +1371,10 @@ function formatActionResult(action, result) {
 
   if (action === 'toggle-priority-group') {
     return result.starred ? `已将 ${result.groupKey} 设为优先分组` : `已取消 ${result.groupKey} 的优先分组`;
+  }
+
+  if (action === 'activate-tab') {
+    return '已切换到目标标签';
   }
 
   if (action === 'create-group-rule' || action === 'update-group-rule') {

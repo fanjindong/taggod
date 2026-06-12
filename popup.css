@@ -48,6 +48,7 @@ h1 {
 .popup-header p,
 .section-title span,
 .status-text,
+.tab-url,
 .session-meta,
 .helper-text {
   color: var(--muted);
@@ -206,6 +207,22 @@ button:disabled {
   background: var(--primary-strong);
 }
 
+.search-box {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  font-size: 13px;
+}
+
+.search-box input {
+  width: 100%;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
 .helper-text {
   margin: 0;
   font-size: 12px;
@@ -217,6 +234,30 @@ button:disabled {
 .section-helper-text {
   color: var(--muted-soft);
   font-size: 11px;
+}
+
+.search-helper-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  color: var(--muted-soft);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.search-helper-text span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+}
+
+.hint-separator {
+  width: 3px;
+  height: 3px;
+  min-height: 3px;
+  border-radius: 999px;
+  background: var(--line-strong);
 }
 
 kbd {
@@ -271,6 +312,7 @@ kbd {
   font-size: 14px;
 }
 
+.tab-list,
 .session-list {
   display: grid;
   gap: 8px;
@@ -278,6 +320,16 @@ kbd {
   overflow: auto;
 }
 
+.quick-results-section {
+  margin-top: 10px;
+}
+
+.quick-result-list {
+  /* 恢复快速切换后仍保留一键整理入口的可见性，因此默认结果列表不能无限撑高。 */
+  max-height: 172px;
+}
+
+.tab-item,
 .session-item {
   display: grid;
   gap: 4px;
@@ -287,6 +339,34 @@ kbd {
   background: var(--surface);
 }
 
+.quick-result-item {
+  width: 100%;
+  min-height: 54px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  text-align: left;
+}
+
+.quick-result-item.is-selected {
+  border-color: var(--primary);
+  background: #eef5ff;
+}
+
+.quick-result-main {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.quick-result-meta {
+  max-width: 112px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .session-row {
   display: flex;
   align-items: center;
@@ -294,6 +374,8 @@ kbd {
   gap: 8px;
 }
 
+.tab-title,
+.tab-url,
 .session-name,
 .session-meta {
   min-width: 0;
@@ -302,11 +384,13 @@ kbd {
   white-space: nowrap;
 }
 
+.tab-title,
 .session-name {
   font-size: 13px;
   font-weight: 600;
 }
 
+.tab-url,
 .session-meta {
   font-size: 12px;
 }

@@ -1,6 +1,7 @@
 const STORAGE_KEYS = {
   sessions: 'tabgod.sessions',
-  settings: 'tabgod.settings'
+  settings: 'tabgod.settings',
+  recentAccess: 'tabgod.recentAccess'
 };
 
 const DEFAULT_SETTINGS = {
@@ -16,6 +17,9 @@ const DEFAULT_SETTINGS = {
 };
 
 const GROUP_COLORS = ['blue', 'green', 'yellow', 'red', 'purple', 'cyan', 'orange', 'pink', 'grey'];
+
+// 只保留最近 300 个标签激活记录，原因是该记录只用于排序兜底，过多历史会浪费本地存储。
+const RECENT_ACCESS_LIMIT = 300;
 
 // 浏览器没有内置可注册主域名 API，这里保留常见多级公共后缀，避免把站点错误合并到公共后缀本身。
 const COMMON_MULTI_PART_PUBLIC_SUFFIXES = new Set([
@@ -473,6 +477,48 @@ function normalizeWorkspace(workspace) {
   });
 }
 
+function normalizeRecentAccessMap(value) {
+  const entries = Object.entries(value || {})
+    .filter(([tabId, accessedAt]) => Number.isInteger(Number(tabId)) && Number.isFinite(accessedAt))
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, RECENT_ACCESS_LIMIT);
+
+  return Object.fromEntries(entries);
+}
+
+async function recordRecentTabAccess(tabId) {
+  if (!Number.isInteger(tabId)) {
+    return;
+  }
+
+  const stored = await chrome.storage.local.get([STORAGE_KEYS.recentAccess]);
+  const recentAccess = normalizeRecentAccessMap(stored[STORAGE_KEYS.recentAccess]);
+  recentAccess[String(tabId)] = Date.now();
+
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.recentAccess]: normalizeRecentAccessMap(recentAccess)
+  });
+}
+
+async function removeRecentTabAccess(tabId) {
+  if (!Number.isInteger(tabId)) {
+    return;
+  }
+
+  const stored = await chrome.storage.local.get([STORAGE_KEYS.recentAccess]);
+  const recentAccess = normalizeRecentAccessMap(stored[STORAGE_KEYS.recentAccess]);
+
+  if (!Object.prototype.hasOwnProperty.call(recentAccess, String(tabId))) {
+    return;
+  }
+
+  delete recentAccess[String(tabId)];
+
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.recentAccess]: recentAccess
+  });
+}
+
 function sortWorkspaces(workspaces) {
   return [...workspaces].map(normalizeWorkspace).sort((left, right) => {
     if (left.favorite !== right.favorite) {
@@ -739,6 +785,69 @@ function buildTabSnapshots(tabs, settings = DEFAULT_SETTINGS) {
   }));
 }
 
+function buildWindowOrderMap(tabs, currentWindowId) {
+  const currentId = Number.isInteger(currentWindowId) ? currentWindowId : null;
+  const windowIds = Array.from(new Set((Array.isArray(tabs) ? tabs : [])
+    .map((tab) => tab.windowId)
+    .filter((windowId) => Number.isInteger(windowId))));
+  const orderedIds = [];
+
+  if (currentId !== null && windowIds.includes(currentId)) {
+    orderedIds.push(currentId);
+  }
+
+  windowIds
+    .filter((windowId) => windowId !== currentId)
+    .sort((left, right) => left - right)
+    .forEach((windowId) => orderedIds.push(windowId));
+
+  return new Map(orderedIds.map((windowId, index) => [windowId, index + 1]));
+}
+
+function getWindowLabel(windowId, currentWindowId, windowOrderMap) {
+  if (Number.isInteger(windowId) && windowId === currentWindowId) {
+    return '当前窗口';
+  }
+
+  // 非当前窗口只提示来源差异，不暴露用户难以理解的内部编号。
+  return windowOrderMap && windowOrderMap.has(windowId) ? '其他窗口' : '其他窗口';
+}
+
+function getTabLastAccessedAt(tab, recentAccessMap = {}) {
+  if (Number.isFinite(tab && tab.lastAccessed)) {
+    return tab.lastAccessed;
+  }
+
+  const recentAccessedAt = recentAccessMap && recentAccessMap[String(tab && tab.id)];
+
+  if (Number.isFinite(recentAccessedAt)) {
+    // 旧版本浏览器可能没有 lastAccessed，本地激活记录用于保持最近使用排序可用。
+    return recentAccessedAt;
+  }
+
+  return 0;
+}
+
+function buildSearchTabSnapshots(tabs, context = {}) {
+  const safeTabs = Array.isArray(tabs) ? tabs : [];
+  const normalizedSettings = normalizeSettings(context.settings);
+  const currentWindowId = Number.isInteger(context.currentWindowId) ? context.currentWindowId : null;
+  const recentAccessMap = context.recentAccessMap || {};
+  const snapshots = buildTabSnapshots(safeTabs, normalizedSettings);
+  const windowOrderMap = buildWindowOrderMap(safeTabs, currentWindowId);
+
+  return snapshots.map((snapshot, index) => {
+    const sourceTab = safeTabs[index] || {};
+
+    return Object.assign({}, snapshot, {
+      windowId: Number.isInteger(sourceTab.windowId) ? sourceTab.windowId : null,
+      isCurrentWindow: Number.isInteger(sourceTab.windowId) && sourceTab.windowId === currentWindowId,
+      windowLabel: getWindowLabel(sourceTab.windowId, currentWindowId, windowOrderMap),
+      lastAccessedAt: getTabLastAccessedAt(sourceTab, recentAccessMap)
+    });
+  });
+}
+
 function chooseDuplicateKeepTab(tabs) {
   const sortedTabs = [...tabs].sort((left, right) => {
     if (left.pinned !== right.pinned) {
@@ -832,20 +941,38 @@ async function getDuplicateOverview() {
 }
 
 async function getPopupState() {
-  const [tabs, stored] = await Promise.all([
+  const [tabs, allTabs, stored] = await Promise.all([
     queryCurrentWindowTabs(),
+    queryAllWindowTabs(),
     chrome.storage.local.get([
       STORAGE_KEYS.sessions,
       STORAGE_KEYS.settings,
+      STORAGE_KEYS.recentAccess
     ])
   ]);
+  const activeTab = tabs.find((tab) => tab.active);
+  const currentWindowId = activeTab && Number.isInteger(activeTab.windowId) ? activeTab.windowId : null;
   const settings = normalizeSettings(stored[STORAGE_KEYS.settings]);
+  const recentAccessMap = normalizeRecentAccessMap(stored[STORAGE_KEYS.recentAccess]);
+  const searchTabs = buildSearchTabSnapshots(allTabs, {
+    settings,
+    currentWindowId,
+    recentAccessMap
+  });
+  const windowCount = new Set(searchTabs
+    .map((tab) => tab.windowId)
+    .filter((windowId) => Number.isInteger(windowId))).size;
 
   return {
+    tabs: searchTabs,
     groups: buildGroupSummaries(tabs, settings),
-    overview: buildOverview(tabs),
+    overview: Object.assign({}, buildOverview(tabs), {
+      allTabCount: searchTabs.length,
+      windowCount
+    }),
     sessions: sortWorkspaces(stored[STORAGE_KEYS.sessions] || []),
-    settings
+    settings,
+    currentWindowId
   };
 }
 
@@ -1083,6 +1210,31 @@ async function saveWorkspace(name) {
 
 async function saveCurrentSession() {
   return saveWorkspace();
+}
+
+async function activateTabAcrossWindows(tabId) {
+  if (!Number.isInteger(tabId)) {
+    throw new Error('目标标签无效');
+  }
+
+  const tab = await chrome.tabs.get(tabId);
+
+  if (!tab || !Number.isInteger(tab.id)) {
+    throw new Error('目标标签可能已关闭');
+  }
+
+  if (Number.isInteger(tab.windowId)) {
+    // 跨窗口切换必须先聚焦窗口，否则只激活标签会让用户看不到目标页面。
+    await chrome.windows.update(tab.windowId, { focused: true });
+  }
+
+  await chrome.tabs.update(tab.id, { active: true });
+  await recordRecentTabAccess(tab.id).catch(() => undefined);
+
+  return {
+    activated: true,
+    windowId: Number.isInteger(tab.windowId) ? tab.windowId : null
+  };
 }
 
 async function closeSavedTabs(tabIds) {
@@ -1607,6 +1759,16 @@ chrome.commands.onCommand.addListener((command) => {
   }
 });
 
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  // 事件记录只作为 lastAccessed 缺失时的排序兜底，失败不影响标签切换主流程。
+  recordRecentTabAccess(activeInfo.tabId).catch(() => undefined);
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  // 标签关闭后清理本地记录，避免已关闭标签长期占用最近使用存储。
+  removeRecentTabAccess(tabId).catch(() => undefined);
+});
+
 async function handleMessage(message) {
   const action = message && message.action;
 
@@ -1692,6 +1854,10 @@ async function handleMessage(message) {
 
   if (action === 'update-settings') {
     return updateSettings(message.settings);
+  }
+
+  if (action === 'activate-tab') {
+    return activateTabAcrossWindows(message.tabId);
   }
 
   throw new Error('未知操作');

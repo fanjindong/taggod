@@ -1,5 +1,6 @@
 const state = {
   tabs: [],
+  recentlyClosedTabs: [],
   groups: [],
   sessions: [],
   settings: {
@@ -24,6 +25,7 @@ const state = {
   query: '',
   selectedIndex: 0,
   moreToolsVisible: false,
+  sortHelpVisible: false,
   ruleEditor: {
     // 表单状态放在前端本地，原因是未保存草稿不应污染 chrome.storage。
     visible: false,
@@ -34,6 +36,8 @@ const state = {
 
 // 默认态只渲染最近 30 条，原因是首开弹窗要快；更多页面可通过搜索直接定位。
 const DEFAULT_RECENT_RESULT_LIMIT = 30;
+// 搜索结果最多渲染 100 条，原因是弹窗空间有限，过多 DOM 会影响键盘选择响应。
+const SEARCH_RESULT_LIMIT = 100;
 
 function sendMessage(action, payload = {}) {
   return chrome.runtime.sendMessage(Object.assign({ action }, payload)).then((response) => {
@@ -56,6 +60,7 @@ async function loadState(options = {}) {
   try {
     const data = await sendMessage('get-state');
     state.tabs = data.tabs || [];
+    state.recentlyClosedTabs = data.recentlyClosedTabs || [];
     state.groups = data.groups || [];
     state.sessions = data.sessions || [];
     state.settings = data.settings || state.settings;
@@ -70,7 +75,7 @@ async function loadState(options = {}) {
     }
 
     if (!options.keepStatus) {
-      setStatus('已加载已打开标签页');
+      setStatus('已加载标签页');
     }
 
     if (!options.skipDuplicateOverview) {
@@ -115,6 +120,7 @@ function bindEvents() {
     renderTabs();
   });
   document.getElementById('searchInput').addEventListener('keydown', handleSearchKeydown);
+  document.getElementById('sortHelpButton').addEventListener('click', toggleSortHelp);
   document.getElementById('moreToolsButton').addEventListener('click', toggleMoreTools);
   document.getElementById('newGroupRuleButton').addEventListener('click', openNewGroupRuleForm);
   document.getElementById('groupRuleForm').addEventListener('submit', saveGroupRule);
@@ -199,13 +205,28 @@ async function closeSelectedDuplicates() {
   }
 }
 
-async function activateSearchResult(tabId) {
-  if (!Number.isInteger(tabId)) {
+async function openSearchResult(result) {
+  if (!result) {
+    setStatus('没有可打开的标签页');
+    return;
+  }
+
+  if (result.resultType === 'recentlyClosed') {
+    if (!result.sessionId) {
+      setStatus('历史标签无效');
+      return;
+    }
+
+    await runAction('restore-closed-session', { sessionId: result.sessionId });
+    return;
+  }
+
+  if (!Number.isInteger(result.id)) {
     setStatus('目标标签无效');
     return;
   }
 
-  await runAction('activate-tab', { tabId });
+  await runAction('activate-tab', { tabId: result.id });
 }
 
 function handleSearchKeydown(event) {
@@ -234,13 +255,36 @@ function handleSearchKeydown(event) {
       return;
     }
 
-    activateSearchResult(selectedTab.id);
+    openSearchResult(selectedTab);
   }
 }
 
 function toggleMoreTools() {
   state.moreToolsVisible = !state.moreToolsVisible;
   renderMoreTools();
+}
+
+function toggleSortHelp() {
+  state.sortHelpVisible = !state.sortHelpVisible;
+  renderSortHelp();
+}
+
+function getSortHelpText(query = state.query) {
+  if (!query) {
+    return '最近使用按页面最近激活时间排序，当前窗口正在看的页面不会占用列表位置。';
+  }
+
+  return '搜索排序按综合分计算：标题完全匹配 +400，标题包含 +300，分组名或主域名包含 +220，网址包含 +100；最近 1 分钟 +260，10 分钟内 +180，1 小时内 +100。同分时已打开标签优先，再按最近使用或关闭时间排序。';
+}
+
+function renderSortHelp() {
+  const button = document.getElementById('sortHelpButton');
+  const helpText = document.getElementById('sortHelpText');
+
+  button.setAttribute('aria-expanded', state.sortHelpVisible ? 'true' : 'false');
+  helpText.textContent = getSortHelpText(state.query);
+  helpText.classList.toggle('is-hidden', !state.sortHelpVisible);
+  helpText.hidden = !state.sortHelpVisible;
 }
 
 function renderMoreTools() {
@@ -992,10 +1036,11 @@ function renderTabs() {
   state.selectedIndex = selectedIndex;
   document.getElementById('visibleCount').textContent = `${visibleTabs.length} 个结果`;
   document.getElementById('resultTitle').textContent = state.query ? '搜索结果' : '最近使用';
+  renderSortHelp();
   tabList.innerHTML = '';
 
   if (visibleTabs.length === 0) {
-    tabList.appendChild(createEmptyState(state.query ? '没有匹配的已打开标签页' : '当前没有可切换的标签页'));
+    tabList.appendChild(createEmptyState(state.query ? '没有匹配的标签页' : '当前没有可切换的标签页'));
     return;
   }
 
@@ -1003,10 +1048,11 @@ function renderTabs() {
     const item = document.createElement('button');
     item.className = `tab-item quick-result-item${index === selectedIndex ? ' is-selected' : ''}`;
     item.type = 'button';
-    item.dataset.action = 'activate';
+    item.dataset.action = tab.resultType === 'recentlyClosed' ? 'restore' : 'activate';
     item.dataset.tabId = String(tab.id);
     const groupTitle = tab.groupTitle || tab.groupKey;
-    const windowLabel = tab.windowLabel || (tab.isCurrentWindow ? '当前窗口' : '其他窗口');
+    const isRecentlyClosed = tab.resultType === 'recentlyClosed';
+    const windowLabel = isRecentlyClosed ? '最近关闭' : (tab.windowLabel || (tab.isCurrentWindow ? '当前窗口' : '其他窗口'));
     const accessLabel = formatRecentAccessTime(Number(tab.lastAccessedAt) || 0);
     const metaText = accessLabel ? `${windowLabel} · ${accessLabel}` : windowLabel;
     item.innerHTML = `
@@ -1016,7 +1062,7 @@ function renderTabs() {
       </span>
       <span class="quick-result-meta">${escapeHtml(metaText)}</span>
     `;
-    item.addEventListener('click', () => activateSearchResult(tab.id));
+    item.addEventListener('click', () => openSearchResult(tab));
     tabList.appendChild(item);
   });
 
@@ -1175,7 +1221,8 @@ function getTabSearchText(tab) {
     tab.title,
     tab.url,
     tab.groupKey,
-    tab.groupTitle
+    tab.groupTitle,
+    tab.shortGroupTitle
   ].map(normalizeSearchText).join(' ');
 }
 
@@ -1260,9 +1307,15 @@ function compareSearchTabs(left, right, query) {
   const now = Date.now();
   const leftScore = getSearchRankingScore(left, query, now);
   const rightScore = getSearchRankingScore(right, query, now);
+  const leftType = left.resultType || 'open';
+  const rightType = right.resultType || 'open';
 
   if (leftScore !== rightScore) {
     return rightScore - leftScore;
+  }
+
+  if (leftType !== rightType) {
+    return leftType === 'open' ? -1 : 1;
   }
 
   const recentCompare = compareRecentTabs(left, right);
@@ -1271,7 +1324,7 @@ function compareSearchTabs(left, right, query) {
     return recentCompare;
   }
 
-  return (left.id || 0) - (right.id || 0);
+  return String(left.id || '').localeCompare(String(right.id || ''), 'zh-CN');
 }
 
 function getVisibleTabsFromState(sourceState) {
@@ -1288,9 +1341,16 @@ function getVisibleTabsFromState(sourceState) {
       .slice(0, DEFAULT_RECENT_RESULT_LIMIT);
   }
 
-  return tabs
+  const recentlyClosedTabs = Array.isArray(sourceState.recentlyClosedTabs) ? sourceState.recentlyClosedTabs : [];
+  const searchPool = [
+    ...tabs.map((tab) => Object.assign({ resultType: 'open' }, tab)),
+    ...recentlyClosedTabs
+  ];
+
+  return searchPool
     .filter((tab) => getSearchMatchScore(tab, query) > 0 || getTabSearchText(tab).includes(query))
-    .sort((left, right) => compareSearchTabs(left, right, query));
+    .sort((left, right) => compareSearchTabs(left, right, query))
+    .slice(0, SEARCH_RESULT_LIMIT);
 }
 
 function clampSelectedIndex(index, total) {
@@ -1375,6 +1435,10 @@ function formatActionResult(action, result) {
 
   if (action === 'activate-tab') {
     return '已切换到目标标签';
+  }
+
+  if (action === 'restore-closed-session') {
+    return '已恢复最近关闭标签页';
   }
 
   if (action === 'create-group-rule' || action === 'update-group-rule') {

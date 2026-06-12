@@ -20,6 +20,10 @@ const GROUP_COLORS = ['blue', 'green', 'yellow', 'red', 'purple', 'cyan', 'orang
 
 // 只保留最近 300 个标签激活记录，原因是该记录只用于排序兜底，过多历史会浪费本地存储。
 const RECENT_ACCESS_LIMIT = 300;
+// Chrome 限制最近关闭会话查询最多 25 条，请求更大数值会直接抛错。
+const RECENTLY_CLOSED_SESSION_LIMIT = 25;
+// 会话里的关闭窗口可能包含多个标签，拆分后的搜索结果仍要限量，避免弹窗输入时处理过多数据。
+const RECENTLY_CLOSED_SEARCH_LIMIT = 100;
 
 // 浏览器没有内置可注册主域名 API，这里保留常见多级公共后缀，避免把站点错误合并到公共后缀本身。
 const COMMON_MULTI_PART_PUBLIC_SUFFIXES = new Set([
@@ -848,6 +852,88 @@ function buildSearchTabSnapshots(tabs, context = {}) {
   });
 }
 
+function buildRecentlyClosedTabSnapshot(tab, options) {
+  const safeTab = tab || {};
+  const sessionId = String(options && options.sessionId ? options.sessionId : '').trim();
+
+  if (!sessionId) {
+    return null;
+  }
+
+  const url = safeTab.url || '';
+  const groupInfo = getResolvedGroupInfo(safeTab, options.settings);
+
+  return {
+    resultType: 'recentlyClosed',
+    sessionId,
+    id: `closed-${sessionId}-${options.sourceIndex}`,
+    title: safeTab.title || '未命名标签',
+    url,
+    groupKey: groupInfo.groupKey,
+    groupTitle: groupInfo.title,
+    shortGroupTitle: getShortGroupTitle(groupInfo.groupKey),
+    closedAt: options.closedAt,
+    lastAccessedAt: options.closedAt,
+    isCurrentWindow: false,
+    windowLabel: '最近关闭',
+    index: options.sourceIndex
+  };
+}
+
+function buildRecentlyClosedTabSnapshots(recentlyClosedSessions, settings) {
+  const snapshots = [];
+  const normalizedSettings = normalizeSettings(settings);
+
+  for (const session of Array.isArray(recentlyClosedSessions) ? recentlyClosedSessions : []) {
+    if (snapshots.length >= RECENTLY_CLOSED_SEARCH_LIMIT) {
+      break;
+    }
+
+    const closedAt = Number(session.lastModified) || 0;
+    const tabSessionId = session.tab && session.tab.sessionId ? session.tab.sessionId : '';
+    const windowSessionId = session.window && session.window.sessionId ? session.window.sessionId : '';
+    const fallbackSessionId = session.sessionId || '';
+
+    if (session.tab) {
+      const snapshot = buildRecentlyClosedTabSnapshot(session.tab, {
+        closedAt,
+        // Chrome 把可恢复编号放在 tab/window 上，兼容兜底只用于非标准或旧数据结构。
+        sessionId: tabSessionId || fallbackSessionId,
+        settings: normalizedSettings,
+        sourceIndex: snapshots.length
+      });
+
+      if (snapshot) {
+        snapshots.push(snapshot);
+      }
+
+      continue;
+    }
+
+    const windowTabs = session.window && Array.isArray(session.window.tabs) ? session.window.tabs : [];
+
+    for (const tab of windowTabs) {
+      if (snapshots.length >= RECENTLY_CLOSED_SEARCH_LIMIT) {
+        break;
+      }
+
+      const snapshot = buildRecentlyClosedTabSnapshot(tab, {
+        closedAt,
+        // 关闭窗口里的单个结果恢复时会恢复整个窗口，这是 Chrome sessionId 的原生粒度。
+        sessionId: windowSessionId || tab.sessionId || fallbackSessionId,
+        settings: normalizedSettings,
+        sourceIndex: snapshots.length
+      });
+
+      if (snapshot) {
+        snapshots.push(snapshot);
+      }
+    }
+  }
+
+  return snapshots;
+}
+
 function chooseDuplicateKeepTab(tabs) {
   const sortedTabs = [...tabs].sort((left, right) => {
     if (left.pinned !== right.pinned) {
@@ -941,9 +1027,10 @@ async function getDuplicateOverview() {
 }
 
 async function getPopupState() {
-  const [tabs, allTabs, stored] = await Promise.all([
+  const [tabs, allTabs, recentlyClosedSessions, stored] = await Promise.all([
     queryCurrentWindowTabs(),
     queryAllWindowTabs(),
+    chrome.sessions.getRecentlyClosed({ maxResults: RECENTLY_CLOSED_SESSION_LIMIT }).catch(() => []),
     chrome.storage.local.get([
       STORAGE_KEYS.sessions,
       STORAGE_KEYS.settings,
@@ -965,6 +1052,7 @@ async function getPopupState() {
 
   return {
     tabs: searchTabs,
+    recentlyClosedTabs: buildRecentlyClosedTabSnapshots(recentlyClosedSessions, settings),
     groups: buildGroupSummaries(tabs, settings),
     overview: Object.assign({}, buildOverview(tabs), {
       allTabCount: searchTabs.length,
@@ -1235,6 +1323,32 @@ async function activateTabAcrossWindows(tabId) {
     activated: true,
     windowId: Number.isInteger(tab.windowId) ? tab.windowId : null
   };
+}
+
+async function restoreClosedSession(sessionId) {
+  const safeSessionId = String(sessionId || '').trim();
+
+  if (!safeSessionId) {
+    throw new Error('历史标签无效');
+  }
+
+  try {
+    const restoredSession = await chrome.sessions.restore(safeSessionId);
+
+    return {
+      restored: true,
+      sessionId: safeSessionId,
+      tabId: restoredSession && restoredSession.tab && Number.isInteger(restoredSession.tab.id)
+        ? restoredSession.tab.id
+        : null,
+      windowId: restoredSession && restoredSession.window && Number.isInteger(restoredSession.window.id)
+        ? restoredSession.window.id
+        : null
+    };
+  } catch (error) {
+    // 最近关闭会话可能已经被 Chrome 清理或被新的关闭记录挤出，统一提示能避免暴露浏览器内部错误文案。
+    throw new Error('历史标签可能已过期');
+  }
 }
 
 async function closeSavedTabs(tabIds) {
@@ -1858,6 +1972,10 @@ async function handleMessage(message) {
 
   if (action === 'activate-tab') {
     return activateTabAcrossWindows(message.tabId);
+  }
+
+  if (action === 'restore-closed-session') {
+    return restoreClosedSession(message.sessionId);
   }
 
   throw new Error('未知操作');

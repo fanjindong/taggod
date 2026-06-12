@@ -43,7 +43,7 @@ if (!manifest.icons || !manifest.action || !manifest.action.default_icon) {
 }
 
 assert.ok(manifest.description.includes('一键整理'));
-assert.ok(!manifest.description.includes('搜索'));
+assert.ok(manifest.description.includes('搜索'));
 
 const popupHtmlPath = path.join(rootDir, 'popup.html');
 const popupStructureHtmlContent = fs.readFileSync(popupHtmlPath, 'utf8');
@@ -54,6 +54,8 @@ const readmeStructureContent = fs.readFileSync(readmePath, 'utf8');
 
 assert.ok(popupStructureHtmlContent.includes('class="primary-action main-organize-action"'));
 assert.ok(popupStructureHtmlContent.includes('class="secondary-action-grid"'));
+assert.ok(popupStructureHtmlContent.includes('搜索已打开标签'));
+assert.ok(popupStructureHtmlContent.includes('id="searchResultList"'));
 assert.ok(popupStructureHtmlContent.includes('aria-label="高级管理"'));
 assert.ok(popupStructureHtmlContent.includes('>高级管理</button>'));
 assert.ok(!popupStructureHtmlContent.includes('<h2>管理操作</h2>'));
@@ -62,7 +64,9 @@ assert.strictEqual((popupStructureHtmlContent.match(/id="saveWorkspaceButton"/g)
 assert.ok(popupStructureCssContent.includes('.main-organize-action'));
 assert.ok(popupStructureCssContent.includes('.secondary-action-grid'));
 assert.ok(popupStructureCssContent.includes('.management-toggle-button'));
+assert.ok(popupStructureCssContent.includes('.quick-result-item'));
 assert.ok(readmeStructureContent.includes('“高级管理”里新增自定义分组规则'));
+assert.ok(readmeStructureContent.includes('搜索框会自动聚焦'));
 assert.ok(!readmeStructureContent.includes('“更多工具”里新增自定义分组规则'));
 
 for (const scriptFile of ['background.js', 'popup.js']) {
@@ -473,9 +477,47 @@ const titledTabSnapshots = backgroundSandbox.buildTabSnapshots([
   { id: 103, title: '站点二', url: 'https://foo.net', active: false, pinned: false, index: 2 }
 ]);
 assert.deepStrictEqual(Array.from(titledTabSnapshots, (tab) => tab.groupTitle), ['google', 'foo.com', 'foo.net']);
-assert.strictEqual(backgroundSandbox.buildSearchTabSnapshots, undefined);
-assert.strictEqual(backgroundSandbox.normalizeRecentAccessMap, undefined);
-assert.strictEqual(backgroundSandbox.activateTabAcrossWindows, undefined);
+assert.strictEqual(typeof backgroundSandbox.buildSearchTabSnapshots, 'function');
+assert.strictEqual(typeof backgroundSandbox.normalizeRecentAccessMap, 'function');
+assert.strictEqual(typeof backgroundSandbox.activateTabAcrossWindows, 'function');
+
+const normalizedRecentAccessMap = backgroundSandbox.normalizeRecentAccessMap({
+  101: 10,
+  102: 30,
+  abc: 40
+});
+assert.strictEqual(normalizedRecentAccessMap['102'], 30);
+assert.strictEqual(normalizedRecentAccessMap['101'], 10);
+assert.strictEqual(normalizedRecentAccessMap.abc, undefined);
+
+const searchSnapshots = backgroundSandbox.buildSearchTabSnapshots([
+  { id: 501, title: '项目仓库', url: 'https://github.com/my-org/project-a', active: false, pinned: false, index: 0, windowId: 10 },
+  { id: 502, title: '普通文档', url: 'https://docs.example.com/a', active: true, pinned: false, index: 1, windowId: 20 }
+], {
+  currentWindowId: 20,
+  recentAccessMap: { 501: 2000, 502: 1000 },
+  settings: backgroundSandbox.normalizeSettings({
+    minTabsPerGroup: 2,
+    priorityGroups: [],
+    groupRules: [
+      {
+        id: 'rule-search-project-a',
+        name: '项目 A 仓库',
+        enabled: true,
+        targetGroupKey: 'custom:项目 A',
+        targetTitle: '项目 A',
+        minTabsPerGroup: null,
+        conditionTree: makeConditionTree([{ field: 'hostname', operator: 'contains', value: 'github.com' }]),
+        createdAt: 1,
+        updatedAt: 1
+      }
+    ]
+  })
+});
+assert.strictEqual(searchSnapshots[0].groupTitle, '项目 A');
+assert.strictEqual(searchSnapshots[0].windowLabel, '其他窗口');
+assert.strictEqual(searchSnapshots[0].lastAccessedAt, 2000);
+assert.strictEqual(searchSnapshots[1].isCurrentWindow, true);
 
 const visibleGroupSummaries = backgroundSandbox.buildGroupSummaries([
   { id: 201, url: 'https://mail.google.com/inbox', pinned: false, index: 0 },
@@ -1019,8 +1061,44 @@ const popupSandbox = {
 vm.createContext(popupSandbox);
 vm.runInContext(fs.readFileSync(popupPath, 'utf8'), popupSandbox, { filename: 'popup.js' });
 
-assert.strictEqual(popupSandbox.getVisibleTabsFromState, undefined);
-assert.strictEqual(popupSandbox.formatRecentAccessTime, undefined);
+assert.strictEqual(typeof popupSandbox.getVisibleTabsFromState, 'function');
+assert.strictEqual(typeof popupSandbox.formatRecentAccessTime, 'function');
+assert.strictEqual(popupSandbox.formatRecentAccessTime(Date.now()), '刚刚');
+const visibleSearchTabs = popupSandbox.getVisibleTabsFromState({
+  query: '项目',
+  tabs: [
+    { id: 1, title: '普通页面', url: 'https://example.com', groupKey: 'example.com', groupTitle: 'example', lastAccessedAt: 1 },
+    { id: 2, title: '项目页面', url: 'https://project.example.com', groupKey: 'custom:项目', groupTitle: '项目', lastAccessedAt: 2 }
+  ]
+});
+assert.deepStrictEqual(Array.from(visibleSearchTabs, (tab) => tab.id), [2]);
+const visibleRecentTabs = popupSandbox.getVisibleTabsFromState({
+  query: '',
+  tabs: [
+    { id: 3, title: '当前页面', active: true, isCurrentWindow: true, lastAccessedAt: 5, index: 0 },
+    { id: 4, title: '最近页面', active: false, isCurrentWindow: false, lastAccessedAt: 10, index: 1 }
+  ]
+});
+assert.deepStrictEqual(Array.from(visibleRecentTabs, (tab) => tab.id), [4]);
+assert.strictEqual(typeof popupSandbox.getSearchRankingScore, 'function');
+const nowForSearchRank = Date.now();
+const recentInternalPageScore = popupSandbox.getSearchRankingScore({
+  id: 5,
+  title: '扩展程序',
+  url: 'chrome://extensions/',
+  groupKey: '其他',
+  groupTitle: '其他',
+  lastAccessedAt: nowForSearchRank
+}, 'ex', nowForSearchRank);
+const oldTitleMatchScore = popupSandbox.getSearchRankingScore({
+  id: 6,
+  title: 'Nexus Repository Manager',
+  url: 'https://nexus.ddxq.mobi/#browse/search=keyword%3Dplan-base-data-client',
+  groupKey: 'ddxq.mobi',
+  groupTitle: 'ddxq',
+  lastAccessedAt: nowForSearchRank - (2 * 60 * 60 * 1000)
+}, 'ex', nowForSearchRank);
+assert.ok(recentInternalPageScore > oldTitleMatchScore);
 assert.strictEqual(typeof popupSandbox.formatGroupRuleThresholdText, 'function');
 assert.strictEqual(popupSandbox.formatGroupRuleThresholdText(null, 2), '使用全局阈值：至少 2 个标签');
 assert.strictEqual(popupSandbox.formatGroupRuleThresholdText(1, 2), '规则阈值：至少 1 个标签');
@@ -1029,6 +1107,8 @@ assert.strictEqual(popupSandbox.createDefaultGroupRuleDraft().enabled, true);
 assert.strictEqual(popupSandbox.createDefaultGroupRuleDraft().conditionTree.type, 'group');
 assert.strictEqual(popupSandbox.createDefaultGroupRuleDraft().conditionTree.logic, 'and');
 assert.strictEqual(popupSandbox.createDefaultGroupRuleDraft().conditionTree.children[0].type, 'condition');
+assert.strictEqual(typeof popupSandbox.moveGroupRuleWithoutReload, 'function');
+assert.strictEqual(typeof popupSandbox.applyGroupRuleMutationWithoutReload, 'function');
 
 const popupHtml = fs.readFileSync(path.join(rootDir, 'popup.html'), 'utf8');
 const popupCssContent = fs.readFileSync(path.join(rootDir, 'popup.css'), 'utf8');
@@ -1064,18 +1144,21 @@ assert.ok(popupHtml.includes('addRuleGroupButton'));
 assert.ok(popupHtml.includes('条件组'));
 assert.ok(popupHtml.includes('满足全部'));
 assert.ok(popupHtml.includes('满足任一'));
+assert.ok(popupHtml.includes('searchInput'));
+assert.ok(popupHtml.includes('searchResultList'));
+assert.ok(popupHtml.includes('搜索已打开标签'));
+assert.ok(popupHtml.includes('快速切换结果'));
+assert.ok(popupHtml.includes('最近使用'));
+assert.ok(popupCssContent.includes('.quick-result-list'));
+assert.ok(popupCssContent.includes('.quick-result-item'));
 assert.ok(popupCssContent.includes('.group-rule-form'));
 assert.ok(popupCssContent.includes('.condition-row'));
 assert.ok(popupCssContent.includes('.condition-group'));
 assert.ok(popupCssContent.includes('.condition-group-child'));
 assert.ok(popupCssContent.includes('.group-rule-item'));
 assert.ok(popupCssContent.includes('.rule-form-status.is-error'));
-assert.ok(!popupHtml.includes('searchInput'));
-assert.ok(!popupHtml.includes('searchResultList'));
-assert.ok(!popupHtml.includes('搜索已打开标签'));
-assert.ok(!popupHtml.includes('快速切换'));
-assert.ok(!popupHtml.includes('最近使用'));
 assert.ok(readmeContent.includes('一键理顺满屏标签'));
+assert.ok(readmeContent.includes('快速找回页面'));
 assert.ok(readmeContent.includes('分组规则是插件的核心能力'));
 assert.ok(readmeContent.includes('自定义分组规则'));
 assert.ok(readmeContent.includes('规则阈值'));
@@ -1085,14 +1168,13 @@ assert.ok(readmeContent.includes('满足全部'));
 assert.ok(readmeContent.includes('满足任一'));
 assert.ok(readmeContent.includes('多个域名'));
 assert.ok(readmeContent.includes('点击“整理当前窗口”'));
-assert.ok(!readmeContent.includes('快速找回想看的页面'));
-assert.ok(!readmeContent.includes('搜索框会自动聚焦'));
-assert.ok(!readmeContent.includes('最近使用页面'));
+assert.ok(readmeContent.includes('搜索框会自动聚焦'));
+assert.ok(readmeContent.includes('最近使用页面'));
 assert.ok(usageSvgContent.includes('一键整理当前窗口'));
-assert.ok(usageSvgContent.includes('整理规则可配置'));
-assert.ok(!usageSvgContent.includes('搜索已打开标签'));
-assert.ok(!usageSvgContent.includes('快速切换'));
-assert.ok(!usageSvgContent.includes('最近使用页面'));
+assert.ok(usageSvgContent.includes('搜索已打开标签'));
+assert.ok(usageSvgContent.includes('最近使用与键盘选择'));
+assert.ok(usageSvgContent.includes('分组规则是核心能力'));
+assert.ok(usageSvgContent.includes('满足全部或满足任一'));
 
 async function runAsyncChecks() {
   const groupOperations = {

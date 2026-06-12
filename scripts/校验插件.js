@@ -34,7 +34,10 @@ if (manifest.manifest_version !== 3) {
   throw new Error('manifest.json 必须使用 Manifest V3');
 }
 
-if (!manifest.permissions.includes('tabs') || !manifest.permissions.includes('tabGroups') || !manifest.permissions.includes('storage')) {
+if (!manifest.permissions.includes('tabs')
+  || !manifest.permissions.includes('tabGroups')
+  || !manifest.permissions.includes('storage')
+  || !manifest.permissions.includes('sessions')) {
   throw new Error('manifest.json 缺少必要权限');
 }
 
@@ -54,8 +57,10 @@ const readmeStructureContent = fs.readFileSync(readmePath, 'utf8');
 
 assert.ok(popupStructureHtmlContent.includes('class="primary-action main-organize-action"'));
 assert.ok(popupStructureHtmlContent.includes('class="secondary-action-grid"'));
-assert.ok(popupStructureHtmlContent.includes('搜索已打开标签'));
+assert.ok(popupStructureHtmlContent.includes('搜索标签页'));
 assert.ok(popupStructureHtmlContent.includes('id="searchResultList"'));
+assert.ok(popupStructureHtmlContent.includes('id="sortHelpButton"'));
+assert.ok(popupStructureHtmlContent.includes('id="sortHelpText"'));
 assert.ok(popupStructureHtmlContent.includes('aria-label="高级管理"'));
 assert.ok(popupStructureHtmlContent.includes('>高级管理</button>'));
 assert.ok(!popupStructureHtmlContent.includes('<h2>管理操作</h2>'));
@@ -67,6 +72,8 @@ assert.ok(popupStructureCssContent.includes('.management-toggle-button'));
 assert.ok(popupStructureCssContent.includes('.quick-result-item'));
 assert.ok(readmeStructureContent.includes('“高级管理”里新增自定义分组规则'));
 assert.ok(readmeStructureContent.includes('搜索框会自动聚焦'));
+assert.ok(readmeStructureContent.includes('最近关闭的标签页'));
+assert.ok(readmeStructureContent.includes('`sessions`'));
 assert.ok(!readmeStructureContent.includes('“更多工具”里新增自定义分组规则'));
 
 for (const scriptFile of ['background.js', 'popup.js']) {
@@ -123,6 +130,41 @@ assert.strictEqual(backgroundSandbox.getDomainKey('http://127.0.0.1:8080'), '127
 assert.strictEqual(backgroundSandbox.getDomainKey('不是有效网址'), '其他');
 assert.strictEqual(backgroundSandbox.getHostnameKey('https://mail.google.com/inbox'), 'mail.google.com');
 assert.strictEqual(backgroundSandbox.getHostnameKey('不是有效网址'), '其他');
+
+const recentlyClosedSnapshots = backgroundSandbox.buildRecentlyClosedTabSnapshots([
+  {
+    lastModified: 1710000000000,
+    tab: {
+      sessionId: 'closed-tab-1',
+      title: '关闭页面',
+      url: 'https://docs.example.com/page'
+    }
+  }
+], {});
+
+assert.strictEqual(recentlyClosedSnapshots.length, 1);
+assert.strictEqual(recentlyClosedSnapshots[0].resultType, 'recentlyClosed');
+assert.strictEqual(recentlyClosedSnapshots[0].sessionId, 'closed-tab-1');
+assert.strictEqual(recentlyClosedSnapshots[0].groupKey, 'example.com');
+
+const recentlyClosedWindowSnapshots = backgroundSandbox.buildRecentlyClosedTabSnapshots([
+  {
+    lastModified: 1710000000000,
+    window: {
+      sessionId: 'closed-window-1',
+      tabs: [
+        {
+          title: '窗口里的关闭页面',
+          url: 'https://mail.example.com/inbox'
+        }
+      ]
+    }
+  }
+], {});
+
+assert.strictEqual(recentlyClosedWindowSnapshots.length, 1);
+assert.strictEqual(recentlyClosedWindowSnapshots[0].sessionId, 'closed-window-1');
+assert.strictEqual(recentlyClosedWindowSnapshots[0].groupKey, 'example.com');
 
 assert.strictEqual(backgroundSandbox.normalizeSettings({}).minTabsPerGroup, 2);
 assert.strictEqual(backgroundSandbox.normalizeSettings({ minTabsPerGroup: 3 }).minTabsPerGroup, 3);
@@ -1064,6 +1106,10 @@ vm.runInContext(fs.readFileSync(popupPath, 'utf8'), popupSandbox, { filename: 'p
 assert.strictEqual(typeof popupSandbox.getVisibleTabsFromState, 'function');
 assert.strictEqual(typeof popupSandbox.formatRecentAccessTime, 'function');
 assert.strictEqual(popupSandbox.formatRecentAccessTime(Date.now()), '刚刚');
+assert.strictEqual(typeof popupSandbox.getSortHelpText, 'function');
+assert.ok(popupSandbox.getSortHelpText('项目').includes('标题完全匹配 +400'));
+assert.ok(popupSandbox.getSortHelpText('项目').includes('最近 1 分钟 +260'));
+assert.ok(popupSandbox.getSortHelpText('').includes('最近使用按页面最近激活时间排序'));
 const visibleSearchTabs = popupSandbox.getVisibleTabsFromState({
   query: '项目',
   tabs: [
@@ -1146,7 +1192,8 @@ assert.ok(popupHtml.includes('满足全部'));
 assert.ok(popupHtml.includes('满足任一'));
 assert.ok(popupHtml.includes('searchInput'));
 assert.ok(popupHtml.includes('searchResultList'));
-assert.ok(popupHtml.includes('搜索已打开标签'));
+assert.ok(popupHtml.includes('sortHelpButton'));
+assert.ok(popupHtml.includes('搜索标签页'));
 assert.ok(popupHtml.includes('快速切换结果'));
 assert.ok(popupHtml.includes('最近使用'));
 assert.ok(popupCssContent.includes('.quick-result-list'));
@@ -1169,7 +1216,7 @@ assert.ok(readmeContent.includes('满足任一'));
 assert.ok(readmeContent.includes('多个域名'));
 assert.ok(readmeContent.includes('点击“整理当前窗口”'));
 assert.ok(readmeContent.includes('搜索框会自动聚焦'));
-assert.ok(readmeContent.includes('最近使用页面'));
+assert.ok(readmeContent.includes('最近使用的已打开页面'));
 assert.ok(usageSvgContent.includes('一键整理当前窗口'));
 assert.ok(usageSvgContent.includes('搜索已打开标签'));
 assert.ok(usageSvgContent.includes('最近使用与键盘选择'));

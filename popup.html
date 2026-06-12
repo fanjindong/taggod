@@ -24,7 +24,7 @@
       </header>
 
       <label class="search-box quick-search-box">
-        <span>搜索已打开标签</span>
+        <span>搜索标签页</span>
         <span class="search-control-frame">
           <input id="searchInput" type="search" placeholder="输入标题、网址或分组名" autocomplete="off" aria-describedby="searchShortcutHint">
           <span id="searchShortcutHint" class="helper-text search-helper-text">
@@ -44,9 +44,13 @@
 
       <section class="list-section quick-results-section" aria-label="快速切换结果">
         <div class="section-title">
-          <h2 id="resultTitle">最近使用</h2>
+          <div class="section-title-main">
+            <h2 id="resultTitle">最近使用</h2>
+            <button id="sortHelpButton" class="icon-help-button" type="button" aria-expanded="false" aria-controls="sortHelpText" title="查看排序规则">?</button>
+          </div>
           <span id="visibleCount">0 个结果</span>
         </div>
+        <p id="sortHelpText" class="sort-help-text is-hidden" hidden></p>
         <div id="searchResultList" class="tab-list quick-result-list"></div>
       </section>
 

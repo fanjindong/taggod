@@ -138,8 +138,13 @@ function getHostnameKey(url) {
   }
 }
 
+function getTabUrl(tab) {
+  // Chrome 更新或懒加载恢复期间，标签可能暂时只有 pendingUrl；保存时必须保留它，否则工作集会把页面当成空地址跳过。
+  return String((tab && (tab.url || tab.pendingUrl)) || '');
+}
+
 function buildRuleMatchContext(tab) {
-  const url = tab && tab.url ? tab.url : '';
+  const url = getTabUrl(tab);
 
   try {
     const parsedUrl = new URL(url);
@@ -223,9 +228,11 @@ function getResolvedGroupInfo(tab, settings) {
   const normalizedSettings = normalizeSettings(settings);
 
   if (tab && tab.pinned) {
+    const url = getTabUrl(tab);
+
     return {
-      groupKey: getDomainKey(tab.url || ''),
-      title: getDomainKey(tab.url || ''),
+      groupKey: getDomainKey(url),
+      title: getDomainKey(url),
       ruleId: '',
       minTabsPerGroup: normalizedSettings.minTabsPerGroup
     };
@@ -242,7 +249,7 @@ function getResolvedGroupInfo(tab, settings) {
     }
   }
 
-  const groupKey = getDomainKey(tab && tab.url ? tab.url : '');
+  const groupKey = getDomainKey(getTabUrl(tab));
 
   return {
     groupKey,
@@ -764,11 +771,12 @@ async function queryAllWindowTabs() {
 
 function buildTabSnapshot(tab, settings = DEFAULT_SETTINGS) {
   const groupInfo = getResolvedGroupInfo(tab, settings);
+  const url = getTabUrl(tab);
 
   return {
     id: tab.id,
     title: tab.title || '未命名标签',
-    url: tab.url || '',
+    url,
     favIconUrl: tab.favIconUrl || '',
     active: Boolean(tab.active),
     pinned: Boolean(tab.pinned),
@@ -1738,14 +1746,19 @@ async function restoreSession(sessionId, options = {}) {
   let createdFirstRestorableTab = false;
 
   if (options.newWindow) {
-    const firstRestorableTab = session.tabs.find((tab) => tab.url && !tab.url.startsWith('chrome://'));
+    const firstRestorableTab = session.tabs.find((tab) => {
+      const url = getTabUrl(tab);
+
+      return url && !url.startsWith('chrome://');
+    });
 
     if (!firstRestorableTab) {
       throw new Error('工作集中没有可恢复的页面');
     }
+    const firstRestorableUrl = getTabUrl(firstRestorableTab);
 
     const createdWindow = await chrome.windows.create({
-      url: firstRestorableTab.url,
+      url: firstRestorableUrl,
       focused: true
     });
     targetWindowId = createdWindow.id;
@@ -1761,14 +1774,16 @@ async function restoreSession(sessionId, options = {}) {
 
       createdTabs.push(Object.assign({}, createdFirstTab, {
         title: firstRestorableTab.title || createdWindow.tabs[0].title,
-        url: firstRestorableTab.url,
+        url: firstRestorableUrl,
         pinned: Boolean(firstRestorableTab.pinned)
       }));
     }
   }
 
   for (const tab of session.tabs) {
-    if (!tab.url || tab.url.startsWith('chrome://')) {
+    const url = getTabUrl(tab);
+
+    if (!url || url.startsWith('chrome://')) {
       // Chrome 内部页面通常不允许扩展创建，跳过可以避免恢复流程整体失败。
       failedCount += 1;
       continue;
@@ -1782,21 +1797,22 @@ async function restoreSession(sessionId, options = {}) {
 
     try {
       const createdTab = await chrome.tabs.create({
-        url: tab.url,
+        url,
         active: false,
         pinned: Boolean(tab.pinned),
         windowId: targetWindowId || undefined
       });
       createdTabs.push(Object.assign({}, createdTab, {
         title: tab.title || createdTab.title,
-        url: tab.url
+        url
       }));
     } catch (error) {
       failedCount += 1;
     }
   }
 
-  await regroupRestoredTabs(createdTabs, settings);
+  // 恢复工作集可能发生在已有同名分组的窗口中，必须重新梳理整个窗口才能把旧标签和新恢复标签合并到同一个原生分组。
+  await reconcileCurrentWindowGroups(settings);
 
   const tabToActivate = createdTabs.find((tab) => tab.url === session.activeUrl) || createdTabs[0];
 

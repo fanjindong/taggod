@@ -519,6 +519,17 @@ const titledTabSnapshots = backgroundSandbox.buildTabSnapshots([
   { id: 103, title: '站点二', url: 'https://foo.net', active: false, pinned: false, index: 2 }
 ]);
 assert.deepStrictEqual(Array.from(titledTabSnapshots, (tab) => tab.groupTitle), ['google', 'foo.com', 'foo.net']);
+
+const pendingUrlTabSnapshots = backgroundSandbox.buildTabSnapshots([
+  { id: 104, title: '更新后待恢复页面', url: '', pendingUrl: 'https://a.ldxp.com/home', active: false, pinned: false, index: 0 },
+  { id: 105, title: '更新后待恢复文档', pendingUrl: 'https://b.ldxp.com/docs', active: false, pinned: false, index: 1 }
+]);
+assert.deepStrictEqual(Array.from(pendingUrlTabSnapshots, (tab) => tab.url), [
+  'https://a.ldxp.com/home',
+  'https://b.ldxp.com/docs'
+]);
+assert.deepStrictEqual(Array.from(pendingUrlTabSnapshots, (tab) => tab.groupKey), ['ldxp.com', 'ldxp.com']);
+assert.deepStrictEqual(Array.from(pendingUrlTabSnapshots, (tab) => tab.groupTitle), ['ldxp', 'ldxp']);
 assert.strictEqual(typeof backgroundSandbox.buildSearchTabSnapshots, 'function');
 assert.strictEqual(typeof backgroundSandbox.normalizeRecentAccessMap, 'function');
 assert.strictEqual(typeof backgroundSandbox.activateTabAcrossWindows, 'function');
@@ -1334,6 +1345,7 @@ async function runAsyncChecks() {
     createdTabs: [],
     grouped: []
   };
+  const restoreWindowTabs = [];
   backgroundSandbox.chrome.storage = {
     local: {
       get: async () => ({
@@ -1374,20 +1386,32 @@ async function runAsyncChecks() {
     }
   };
   backgroundSandbox.chrome.windows = {
-    create: async ({ url, focused }) => ({
-      id: 900,
-      tabs: [{ id: 911, title: '固定仓库', url, pinned: false, active: true, index: 0, windowId: 900 }],
-      focused
-    })
+    create: async ({ url, focused }) => {
+      const createdWindowTab = { id: 911, title: '固定仓库', url, pinned: false, active: true, index: 0, windowId: 900 };
+      restoreWindowTabs.push(createdWindowTab);
+
+      return {
+        id: 900,
+        tabs: [createdWindowTab],
+        focused
+      };
+    }
   };
   backgroundSandbox.chrome.tabs = {
     create: async (options) => {
       const createdTab = Object.assign({ id: 912, title: '普通仓库', index: 1, windowId: 900 }, options);
       restoreOperations.createdTabs.push(createdTab);
+      restoreWindowTabs.push(createdTab);
       return createdTab;
     },
     update: async (tabId, options) => {
       restoreOperations.tabUpdates.push({ tabId, options });
+      const tab = restoreWindowTabs.find((item) => item.id === tabId);
+
+      if (tab) {
+        Object.assign(tab, options);
+      }
+
       return Object.assign({ id: tabId }, options);
     },
     group: async ({ tabIds }) => {
@@ -1398,12 +1422,166 @@ async function runAsyncChecks() {
   backgroundSandbox.chrome.tabGroups = {
     update: async () => undefined
   };
+  backgroundSandbox.queryCurrentWindowTabs = async () => restoreWindowTabs;
 
   await backgroundSandbox.restoreSession('session-pinned-first', { newWindow: true });
   assert.ok(restoreOperations.tabUpdates.some((item) => {
     return item.tabId === 911 && item.options.pinned === true;
   }));
   assert.deepStrictEqual(restoreOperations.grouped, [[912]]);
+
+  const duplicateRestoreOperations = {
+    createdTabs: [],
+    grouped: [],
+    updated: []
+  };
+  const duplicateRestoreTabs = [
+    { id: 921, title: '项目首页', url: 'https://a.ldxp.com/home', pinned: false, groupId: 21, index: 0 },
+    { id: 922, title: '项目文档', url: 'https://b.ldxp.com/docs', pinned: false, groupId: 21, index: 1 }
+  ];
+  backgroundSandbox.chrome.storage = {
+    local: {
+      get: async () => ({
+        'tabgod.sessions': [
+          {
+            id: 'session-duplicate-current-window',
+            name: '重复恢复工作集',
+            createdAt: 1,
+            updatedAt: 1,
+            activeUrl: 'https://a.ldxp.com/home',
+            tabs: [
+              {
+                id: 923,
+                title: '项目首页',
+                url: 'https://a.ldxp.com/home',
+                pinned: false,
+                active: true,
+                index: 0
+              },
+              {
+                id: 924,
+                title: '项目文档',
+                url: 'https://b.ldxp.com/docs',
+                pinned: false,
+                active: false,
+                index: 1
+              }
+            ],
+            groups: []
+          }
+        ],
+        'tabgod.settings': {
+          minTabsPerGroup: 2,
+          priorityGroups: [],
+          groupRules: []
+        }
+      })
+    }
+  };
+  backgroundSandbox.queryCurrentWindowTabs = async () => duplicateRestoreTabs;
+  backgroundSandbox.chrome.tabs = {
+    create: async (options) => {
+      const createdTab = Object.assign({
+        id: 923 + duplicateRestoreOperations.createdTabs.length,
+        title: duplicateRestoreOperations.createdTabs.length === 0 ? '项目首页' : '项目文档',
+        groupId: -1,
+        index: duplicateRestoreTabs.length + duplicateRestoreOperations.createdTabs.length
+      }, options);
+      duplicateRestoreOperations.createdTabs.push(createdTab);
+      duplicateRestoreTabs.push(createdTab);
+      return createdTab;
+    },
+    update: async (tabId, options) => Object.assign({ id: tabId }, options),
+    group: async ({ tabIds }) => {
+      duplicateRestoreOperations.grouped.push(Array.from(tabIds));
+      return 91;
+    }
+  };
+  backgroundSandbox.chrome.tabGroups = {
+    update: async (groupId, options) => {
+      duplicateRestoreOperations.updated.push({ groupId, options });
+    }
+  };
+
+  await backgroundSandbox.restoreSession('session-duplicate-current-window');
+  assert.deepStrictEqual(duplicateRestoreOperations.grouped, [[921, 922, 923, 924]]);
+  assert.strictEqual(duplicateRestoreOperations.updated[0].options.title, 'ldxp');
+
+  const pendingRestoreOperations = {
+    createdUrls: [],
+    grouped: []
+  };
+  const pendingRestoreTabs = [];
+  backgroundSandbox.chrome.storage = {
+    local: {
+      get: async () => ({
+        'tabgod.sessions': [
+          {
+            id: 'session-pending-url',
+            name: '更新后待恢复工作集',
+            createdAt: 1,
+            updatedAt: 1,
+            activeUrl: 'https://a.ldxp.com/home',
+            tabs: [
+              {
+                id: 931,
+                title: '项目首页',
+                url: '',
+                pendingUrl: 'https://a.ldxp.com/home',
+                pinned: false,
+                active: true,
+                index: 0
+              },
+              {
+                id: 932,
+                title: '项目文档',
+                pendingUrl: 'https://b.ldxp.com/docs',
+                pinned: false,
+                active: false,
+                index: 1
+              }
+            ],
+            groups: []
+          }
+        ],
+        'tabgod.settings': {
+          minTabsPerGroup: 2,
+          priorityGroups: [],
+          groupRules: []
+        }
+      })
+    }
+  };
+  backgroundSandbox.queryCurrentWindowTabs = async () => pendingRestoreTabs;
+  backgroundSandbox.chrome.tabs = {
+    create: async (options) => {
+      const createdTab = Object.assign({
+        id: 931 + pendingRestoreOperations.createdUrls.length,
+        title: '待恢复页面',
+        groupId: -1,
+        index: pendingRestoreOperations.createdUrls.length
+      }, options);
+      pendingRestoreOperations.createdUrls.push(options.url);
+      pendingRestoreTabs.push(createdTab);
+      return createdTab;
+    },
+    update: async (tabId, options) => Object.assign({ id: tabId }, options),
+    group: async ({ tabIds }) => {
+      pendingRestoreOperations.grouped.push(Array.from(tabIds));
+      return 92;
+    }
+  };
+  backgroundSandbox.chrome.tabGroups = {
+    update: async () => undefined
+  };
+
+  const pendingRestoreResult = await backgroundSandbox.restoreSession('session-pending-url');
+  assert.deepStrictEqual(pendingRestoreOperations.createdUrls, [
+    'https://a.ldxp.com/home',
+    'https://b.ldxp.com/docs'
+  ]);
+  assert.deepStrictEqual(pendingRestoreOperations.grouped, [[931, 932]]);
+  assert.strictEqual(pendingRestoreResult.failedCount, 0);
 
   const storedState = {
     'tabgod.settings': backgroundSandbox.normalizeSettings({

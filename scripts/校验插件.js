@@ -530,7 +530,6 @@ assert.deepStrictEqual(Array.from(pendingUrlTabSnapshots, (tab) => tab.url), [
 ]);
 assert.deepStrictEqual(Array.from(pendingUrlTabSnapshots, (tab) => tab.groupKey), ['ldxp.com', 'ldxp.com']);
 assert.deepStrictEqual(Array.from(pendingUrlTabSnapshots, (tab) => tab.groupTitle), ['ldxp', 'ldxp']);
-assert.strictEqual(typeof backgroundSandbox.buildSearchTabSnapshots, 'function');
 assert.strictEqual(typeof backgroundSandbox.normalizeRecentAccessMap, 'function');
 assert.strictEqual(typeof backgroundSandbox.activateTabAcrossWindows, 'function');
 
@@ -542,35 +541,6 @@ const normalizedRecentAccessMap = backgroundSandbox.normalizeRecentAccessMap({
 assert.strictEqual(normalizedRecentAccessMap['102'], 30);
 assert.strictEqual(normalizedRecentAccessMap['101'], 10);
 assert.strictEqual(normalizedRecentAccessMap.abc, undefined);
-
-const searchSnapshots = backgroundSandbox.buildSearchTabSnapshots([
-  { id: 501, title: '项目仓库', url: 'https://github.com/my-org/project-a', active: false, pinned: false, index: 0, windowId: 10 },
-  { id: 502, title: '普通文档', url: 'https://docs.example.com/a', active: true, pinned: false, index: 1, windowId: 20 }
-], {
-  currentWindowId: 20,
-  recentAccessMap: { 501: 2000, 502: 1000 },
-  settings: backgroundSandbox.normalizeSettings({
-    minTabsPerGroup: 2,
-    priorityGroups: [],
-    groupRules: [
-      {
-        id: 'rule-search-project-a',
-        name: '项目 A 仓库',
-        enabled: true,
-        targetGroupKey: 'custom:项目 A',
-        targetTitle: '项目 A',
-        minTabsPerGroup: null,
-        conditionTree: makeConditionTree([{ field: 'hostname', operator: 'contains', value: 'github.com' }]),
-        createdAt: 1,
-        updatedAt: 1
-      }
-    ]
-  })
-});
-assert.strictEqual(searchSnapshots[0].groupTitle, '项目 A');
-assert.strictEqual(searchSnapshots[0].windowLabel, '其他窗口');
-assert.strictEqual(searchSnapshots[0].lastAccessedAt, 2000);
-assert.strictEqual(searchSnapshots[1].isCurrentWindow, true);
 
 const visibleGroupSummaries = backgroundSandbox.buildGroupSummaries([
   { id: 201, url: 'https://mail.google.com/inbox', pinned: false, index: 0 },
@@ -1039,8 +1009,14 @@ assert.strictEqual(oldWorkspace.favoritedAt, 0);
 assert.strictEqual(oldWorkspace.updatedAt, 1);
 
 const popupPath = path.join(rootDir, 'popup.js');
+const popupChromeCalls = {
+  messages: [],
+  tabQueries: [],
+  storageGets: []
+};
 const popupSandbox = {
   console,
+  URL,
   document: {
     addEventListener() {},
     getElementById() {
@@ -1088,8 +1064,35 @@ const popupSandbox = {
   },
   chrome: {
     runtime: {
-      sendMessage() {
+      sendMessage(message) {
+        popupChromeCalls.messages.push(message);
         return Promise.resolve({ ok: true, payload: {} });
+      }
+    },
+    tabs: {
+      async query(queryInfo) {
+        popupChromeCalls.tabQueries.push(queryInfo);
+
+        const currentTabs = [
+          { id: 1, title: '当前页面', url: 'https://a.example.com', active: true, windowId: 10, index: 0, lastAccessed: 100 }
+        ];
+        const otherTabs = [
+          { id: 2, title: '其他页面', url: 'https://b.example.com', active: false, windowId: 20, index: 0, lastAccessed: 200 }
+        ];
+
+        return queryInfo && queryInfo.currentWindow ? currentTabs : [...currentTabs, ...otherTabs];
+      }
+    },
+    storage: {
+      local: {
+        async get(keys) {
+          popupChromeCalls.storageGets.push(keys);
+
+          return {
+            'tabgod.settings': { minTabsPerGroup: 3 },
+            'tabgod.recentAccess': { 2: 300 }
+          };
+        }
       }
     }
   },
@@ -1113,6 +1116,25 @@ const popupSandbox = {
 
 vm.createContext(popupSandbox);
 vm.runInContext(fs.readFileSync(popupPath, 'utf8'), popupSandbox, { filename: 'popup.js' });
+
+async function assertPopupDirectStateContract() {
+  popupChromeCalls.messages.length = 0;
+  popupChromeCalls.tabQueries.length = 0;
+  popupChromeCalls.storageGets.length = 0;
+
+  const localState = await popupSandbox.loadPopupStateFromBrowser();
+
+  // 首屏直接读浏览器 API，原因是唤醒后台 service worker 是冷启动的主要耗时。
+  assert.strictEqual(popupChromeCalls.messages.length, 0);
+  assert.strictEqual(popupChromeCalls.tabQueries.length, 2);
+  assert.strictEqual(popupChromeCalls.storageGets.length, 1);
+  assert.strictEqual(localState.tabs.length, 2);
+  assert.strictEqual(localState.tabs[0].groupKey, 'a.example.com');
+  assert.strictEqual(localState.settings.minTabsPerGroup, 3);
+  assert.strictEqual(localState.overview.allTabCount, 2);
+  assert.strictEqual(localState.recentlyClosedTabs.length, 0);
+  assert.strictEqual(localState.sessions.length, 0);
+}
 
 assert.strictEqual(typeof popupSandbox.getVisibleTabsFromState, 'function');
 assert.strictEqual(typeof popupSandbox.formatRecentAccessTime, 'function');
@@ -1235,6 +1257,8 @@ assert.ok(usageSvgContent.includes('分组规则是核心能力'));
 assert.ok(usageSvgContent.includes('满足全部或满足任一'));
 
 async function runAsyncChecks() {
+  await assertPopupDirectStateContract();
+
   const groupOperations = {
     grouped: [],
     ungrouped: [],

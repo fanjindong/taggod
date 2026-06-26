@@ -25,6 +25,11 @@ const state = {
   query: '',
   selectedIndex: 0,
   moreToolsVisible: false,
+  recentlyClosedTabsLoaded: false,
+  recentlyClosedTabsLoading: false,
+  managementLoaded: false,
+  managementLoading: false,
+  duplicateOverviewScheduled: false,
   sortHelpVisible: false,
   ruleEditor: {
     // 表单状态放在前端本地，原因是未保存草稿不应污染 chrome.storage。
@@ -38,6 +43,10 @@ const state = {
 const DEFAULT_RECENT_RESULT_LIMIT = 30;
 // 搜索结果最多渲染 100 条，原因是弹窗空间有限，过多 DOM 会影响键盘选择响应。
 const SEARCH_RESULT_LIMIT = 100;
+const POPUP_STORAGE_KEYS = {
+  settings: 'tabgod.settings',
+  recentAccess: 'tabgod.recentAccess'
+};
 
 function sendMessage(action, payload = {}) {
   return chrome.runtime.sendMessage(Object.assign({ action }, payload)).then((response) => {
@@ -49,6 +58,129 @@ function sendMessage(action, payload = {}) {
   });
 }
 
+function normalizePopupSettings(settings) {
+  const normalizedSettings = Object.assign({}, state.settings, settings || {});
+
+  if (!Number.isInteger(normalizedSettings.minTabsPerGroup) || normalizedSettings.minTabsPerGroup < 1) {
+    // 弹窗首屏只需要展示阈值，非法配置回落到默认值可以避免设置输入框显示异常。
+    normalizedSettings.minTabsPerGroup = state.settings.minTabsPerGroup;
+  }
+
+  if (!Array.isArray(normalizedSettings.priorityGroups)) {
+    normalizedSettings.priorityGroups = [];
+  }
+
+  if (!Array.isArray(normalizedSettings.groupRules)) {
+    normalizedSettings.groupRules = [];
+  }
+
+  return normalizedSettings;
+}
+
+function getPopupTabUrl(tab) {
+  return String((tab && (tab.url || tab.pendingUrl)) || '');
+}
+
+function getPopupGroupKey(url) {
+  try {
+    const parsedUrl = new URL(url);
+    const hostname = String(parsedUrl.hostname || '').toLowerCase().replace(/\.$/, '');
+
+    return hostname || '其他';
+  } catch (error) {
+    // 首屏本地路径只做搜索展示，异常地址归为“其他”即可，完整分组规则仍由后台处理。
+    return '其他';
+  }
+}
+
+function getPopupLastAccessedAt(tab, recentAccessMap) {
+  if (Number.isFinite(tab && tab.lastAccessed)) {
+    return tab.lastAccessed;
+  }
+
+  const storedAccessedAt = recentAccessMap && Number(recentAccessMap[String(tab && tab.id)]);
+
+  return Number.isFinite(storedAccessedAt) ? storedAccessedAt : 0;
+}
+
+function buildPopupTabSnapshots(tabs, context = {}) {
+  const currentWindowId = Number.isInteger(context.currentWindowId) ? context.currentWindowId : null;
+  const recentAccessMap = context.recentAccessMap || {};
+
+  return (Array.isArray(tabs) ? tabs : []).map((tab) => {
+    const url = getPopupTabUrl(tab);
+    const groupKey = getPopupGroupKey(url);
+    const isCurrentWindow = Number.isInteger(tab.windowId) && tab.windowId === currentWindowId;
+
+    return {
+      id: tab.id,
+      title: tab.title || '未命名标签',
+      url,
+      favIconUrl: tab.favIconUrl || '',
+      active: Boolean(tab.active),
+      pinned: Boolean(tab.pinned),
+      index: Number.isInteger(tab.index) ? tab.index : 0,
+      groupKey,
+      groupTitle: groupKey,
+      windowId: Number.isInteger(tab.windowId) ? tab.windowId : null,
+      isCurrentWindow,
+      windowLabel: isCurrentWindow ? '当前窗口' : '其他窗口',
+      lastAccessedAt: getPopupLastAccessedAt(tab, recentAccessMap)
+    };
+  });
+}
+
+function buildPopupOverview(currentTabs, allTabs) {
+  const domainSet = new Set();
+  const groupSet = new Set();
+
+  (Array.isArray(currentTabs) ? currentTabs : []).forEach((tab) => {
+    domainSet.add(getPopupGroupKey(getPopupTabUrl(tab)));
+
+    if (typeof tab.groupId === 'number' && tab.groupId >= 0) {
+      groupSet.add(tab.groupId);
+    }
+  });
+
+  const windowCount = new Set((Array.isArray(allTabs) ? allTabs : [])
+    .map((tab) => tab.windowId)
+    .filter((windowId) => Number.isInteger(windowId))).size;
+
+  return {
+    tabCount: Array.isArray(currentTabs) ? currentTabs.length : 0,
+    domainCount: domainSet.size,
+    duplicateCount: null,
+    groupCount: groupSet.size,
+    allTabCount: Array.isArray(allTabs) ? allTabs.length : 0,
+    windowCount
+  };
+}
+
+async function loadPopupStateFromBrowser() {
+  const [currentTabs, allTabs, stored] = await Promise.all([
+    chrome.tabs.query({ currentWindow: true }),
+    chrome.tabs.query({}),
+    chrome.storage.local.get([
+      POPUP_STORAGE_KEYS.settings,
+      POPUP_STORAGE_KEYS.recentAccess
+    ])
+  ]);
+  const activeTab = currentTabs.find((tab) => tab.active);
+  const currentWindowId = activeTab && Number.isInteger(activeTab.windowId) ? activeTab.windowId : null;
+  const settings = normalizePopupSettings(stored[POPUP_STORAGE_KEYS.settings]);
+  const recentAccessMap = stored[POPUP_STORAGE_KEYS.recentAccess] || {};
+
+  return {
+    tabs: buildPopupTabSnapshots(allTabs, { currentWindowId, recentAccessMap }),
+    recentlyClosedTabs: [],
+    groups: [],
+    overview: buildPopupOverview(currentTabs, allTabs),
+    sessions: [],
+    settings,
+    currentWindowId
+  };
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   bindEvents();
   loadState();
@@ -58,11 +190,14 @@ async function loadState(options = {}) {
   setBusy(true);
 
   try {
-    const data = await sendMessage('get-state');
+    const data = await loadPopupStateFromBrowser();
     state.tabs = data.tabs || [];
-    state.recentlyClosedTabs = data.recentlyClosedTabs || [];
-    state.groups = data.groups || [];
-    state.sessions = data.sessions || [];
+
+    if (!state.managementLoaded) {
+      state.groups = data.groups || [];
+      state.sessions = data.sessions || [];
+    }
+
     state.settings = data.settings || state.settings;
     state.overview = data.overview || state.overview;
     state.selectedIndex = clampSelectedIndex(state.selectedIndex, getVisibleTabsFromState(state).length);
@@ -78,13 +213,94 @@ async function loadState(options = {}) {
       setStatus('已加载标签页');
     }
 
+    if (state.moreToolsVisible) {
+      await loadManagementState({ skipBusy: true, keepStatus: true });
+    }
+
     if (!options.skipDuplicateOverview) {
-      loadDuplicateOverview();
+      scheduleDuplicateOverviewLoad();
     }
   } catch (error) {
     setStatus(error.message || '读取标签页失败');
   } finally {
     setBusy(false);
+  }
+}
+
+function scheduleDuplicateOverviewLoad() {
+  if (state.duplicateOverviewScheduled) {
+    return;
+  }
+
+  state.duplicateOverviewScheduled = true;
+  const run = () => {
+    state.duplicateOverviewScheduled = false;
+    loadDuplicateOverview();
+  };
+
+  if (typeof window.requestIdleCallback === 'function') {
+    // 最多等半秒是为了避免弹窗生命周期太短时一直等不到空闲回调。
+    window.requestIdleCallback(run, { timeout: 500 });
+    return;
+  }
+
+  window.setTimeout(run, 0);
+}
+
+async function loadRecentlyClosedTabs() {
+  if (state.recentlyClosedTabsLoaded || state.recentlyClosedTabsLoading) {
+    return;
+  }
+
+  state.recentlyClosedTabsLoading = true;
+
+  try {
+    const data = await sendMessage('get-recently-closed-tabs');
+    state.recentlyClosedTabs = data.recentlyClosedTabs || [];
+    state.recentlyClosedTabsLoaded = true;
+    renderTabs();
+  } catch (error) {
+    // 最近关闭只是搜索增强，失败时保持已打开标签搜索可用，避免把慢路径变成主路径错误。
+    state.recentlyClosedTabs = [];
+    state.recentlyClosedTabsLoaded = true;
+  } finally {
+    state.recentlyClosedTabsLoading = false;
+  }
+}
+
+async function loadManagementState(options = {}) {
+  if (state.managementLoading) {
+    return;
+  }
+
+  state.managementLoading = true;
+
+  if (!options.skipBusy) {
+    setBusy(true);
+  }
+
+  try {
+    const data = await sendMessage('get-management-state');
+    state.groups = data.groups || [];
+    state.sessions = data.sessions || [];
+    state.settings = data.settings || state.settings;
+    state.managementLoaded = true;
+    renderSettings();
+    renderGroupRules();
+    renderGroupRuleForm();
+    renderGroups();
+    renderSessions();
+    renderMoreTools();
+  } catch (error) {
+    if (!options.keepStatus) {
+      setStatus(error.message || '读取高级管理失败');
+    }
+  } finally {
+    state.managementLoading = false;
+
+    if (!options.skipBusy) {
+      setBusy(false);
+    }
   }
 }
 
@@ -118,6 +334,9 @@ function bindEvents() {
     state.selectedIndex = 0;
     renderOverview();
     renderTabs();
+    if (state.query) {
+      loadRecentlyClosedTabs();
+    }
   });
   document.getElementById('searchInput').addEventListener('keydown', handleSearchKeydown);
   document.getElementById('sortHelpButton').addEventListener('click', toggleSortHelp);
@@ -259,9 +478,14 @@ function handleSearchKeydown(event) {
   }
 }
 
-function toggleMoreTools() {
+async function toggleMoreTools() {
   state.moreToolsVisible = !state.moreToolsVisible;
   renderMoreTools();
+
+  if (state.moreToolsVisible && !state.managementLoaded) {
+    await loadManagementState();
+    focusMoreTools();
+  }
 }
 
 function toggleSortHelp() {
@@ -408,12 +632,14 @@ function getDefaultWorkspaceName() {
 function render() {
   renderSettings();
   renderOverview();
-  renderGroupRules();
-  renderGroupRuleForm();
-  renderGroups();
+  if (state.moreToolsVisible || state.managementLoaded) {
+    renderGroupRules();
+    renderGroupRuleForm();
+    renderGroups();
+    renderSessions();
+  }
   renderDuplicateReview();
   renderTabs();
-  renderSessions();
   renderMoreTools();
 }
 

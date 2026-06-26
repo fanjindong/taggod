@@ -797,69 +797,6 @@ function buildTabSnapshots(tabs, settings = DEFAULT_SETTINGS) {
   }));
 }
 
-function buildWindowOrderMap(tabs, currentWindowId) {
-  const currentId = Number.isInteger(currentWindowId) ? currentWindowId : null;
-  const windowIds = Array.from(new Set((Array.isArray(tabs) ? tabs : [])
-    .map((tab) => tab.windowId)
-    .filter((windowId) => Number.isInteger(windowId))));
-  const orderedIds = [];
-
-  if (currentId !== null && windowIds.includes(currentId)) {
-    orderedIds.push(currentId);
-  }
-
-  windowIds
-    .filter((windowId) => windowId !== currentId)
-    .sort((left, right) => left - right)
-    .forEach((windowId) => orderedIds.push(windowId));
-
-  return new Map(orderedIds.map((windowId, index) => [windowId, index + 1]));
-}
-
-function getWindowLabel(windowId, currentWindowId, windowOrderMap) {
-  if (Number.isInteger(windowId) && windowId === currentWindowId) {
-    return '当前窗口';
-  }
-
-  // 非当前窗口只提示来源差异，不暴露用户难以理解的内部编号。
-  return windowOrderMap && windowOrderMap.has(windowId) ? '其他窗口' : '其他窗口';
-}
-
-function getTabLastAccessedAt(tab, recentAccessMap = {}) {
-  if (Number.isFinite(tab && tab.lastAccessed)) {
-    return tab.lastAccessed;
-  }
-
-  const recentAccessedAt = recentAccessMap && recentAccessMap[String(tab && tab.id)];
-
-  if (Number.isFinite(recentAccessedAt)) {
-    // 旧版本浏览器可能没有 lastAccessed，本地激活记录用于保持最近使用排序可用。
-    return recentAccessedAt;
-  }
-
-  return 0;
-}
-
-function buildSearchTabSnapshots(tabs, context = {}) {
-  const safeTabs = Array.isArray(tabs) ? tabs : [];
-  const normalizedSettings = normalizeSettings(context.settings);
-  const currentWindowId = Number.isInteger(context.currentWindowId) ? context.currentWindowId : null;
-  const recentAccessMap = context.recentAccessMap || {};
-  const snapshots = buildTabSnapshots(safeTabs, normalizedSettings);
-  const windowOrderMap = buildWindowOrderMap(safeTabs, currentWindowId);
-
-  return snapshots.map((snapshot, index) => {
-    const sourceTab = safeTabs[index] || {};
-
-    return Object.assign({}, snapshot, {
-      windowId: Number.isInteger(sourceTab.windowId) ? sourceTab.windowId : null,
-      isCurrentWindow: Number.isInteger(sourceTab.windowId) && sourceTab.windowId === currentWindowId,
-      windowLabel: getWindowLabel(sourceTab.windowId, currentWindowId, windowOrderMap),
-      lastAccessedAt: getTabLastAccessedAt(sourceTab, recentAccessMap)
-    });
-  });
-}
-
 function buildRecentlyClosedTabSnapshot(tab, options) {
   const safeTab = tab || {};
   const sessionId = String(options && options.sessionId ? options.sessionId : '').trim();
@@ -1034,41 +971,32 @@ async function getDuplicateOverview() {
   };
 }
 
-async function getPopupState() {
-  const [tabs, allTabs, recentlyClosedSessions, stored] = await Promise.all([
-    queryCurrentWindowTabs(),
-    queryAllWindowTabs(),
+async function getRecentlyClosedState() {
+  const [recentlyClosedSessions, stored] = await Promise.all([
     chrome.sessions.getRecentlyClosed({ maxResults: RECENTLY_CLOSED_SESSION_LIMIT }).catch(() => []),
-    chrome.storage.local.get([
-      STORAGE_KEYS.sessions,
-      STORAGE_KEYS.settings,
-      STORAGE_KEYS.recentAccess
-    ])
+    chrome.storage.local.get([STORAGE_KEYS.settings])
   ]);
-  const activeTab = tabs.find((tab) => tab.active);
-  const currentWindowId = activeTab && Number.isInteger(activeTab.windowId) ? activeTab.windowId : null;
   const settings = normalizeSettings(stored[STORAGE_KEYS.settings]);
-  const recentAccessMap = normalizeRecentAccessMap(stored[STORAGE_KEYS.recentAccess]);
-  const searchTabs = buildSearchTabSnapshots(allTabs, {
-    settings,
-    currentWindowId,
-    recentAccessMap
-  });
-  const windowCount = new Set(searchTabs
-    .map((tab) => tab.windowId)
-    .filter((windowId) => Number.isInteger(windowId))).size;
 
   return {
-    tabs: searchTabs,
-    recentlyClosedTabs: buildRecentlyClosedTabSnapshots(recentlyClosedSessions, settings),
+    recentlyClosedTabs: buildRecentlyClosedTabSnapshots(recentlyClosedSessions, settings)
+  };
+}
+
+async function getManagementState() {
+  const [tabs, stored] = await Promise.all([
+    queryCurrentWindowTabs(),
+    chrome.storage.local.get([
+      STORAGE_KEYS.sessions,
+      STORAGE_KEYS.settings
+    ])
+  ]);
+  const settings = normalizeSettings(stored[STORAGE_KEYS.settings]);
+
+  return {
     groups: buildGroupSummaries(tabs, settings),
-    overview: Object.assign({}, buildOverview(tabs), {
-      allTabCount: searchTabs.length,
-      windowCount
-    }),
     sessions: sortWorkspaces(stored[STORAGE_KEYS.sessions] || []),
-    settings,
-    currentWindowId
+    settings
   };
 }
 
@@ -1902,8 +1830,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 async function handleMessage(message) {
   const action = message && message.action;
 
-  if (action === 'get-state') {
-    return getPopupState();
+  if (action === 'get-recently-closed-tabs') {
+    return getRecentlyClosedState();
+  }
+
+  if (action === 'get-management-state') {
+    return getManagementState();
   }
 
   if (action === 'get-duplicate-overview') {

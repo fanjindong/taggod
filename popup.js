@@ -31,6 +31,7 @@ const state = {
   managementLoading: false,
   duplicateOverviewScheduled: false,
   sortHelpVisible: false,
+  actionStatusResetTimer: null,
   ruleEditor: {
     // 表单状态放在前端本地，原因是未保存草稿不应污染 chrome.storage。
     visible: false,
@@ -313,13 +314,17 @@ async function loadDuplicateOverview() {
     renderOverview();
   } catch (error) {
     // 重复数量只用于轻提示，失败不应该影响一键整理主路径。
-    document.getElementById('duplicateHintText').textContent = '';
+    const duplicateHint = document.getElementById('duplicateHintText');
+    duplicateHint.textContent = '';
+    duplicateHint.hidden = true;
+    duplicateHint.classList.add('is-hidden');
   }
 }
 
 function bindEvents() {
   document.getElementById('organizeButton').addEventListener('click', () => runAction('organize-tabs'));
   document.getElementById('scanDuplicatesButton').addEventListener('click', scanDuplicates);
+  document.getElementById('duplicateHintText').addEventListener('click', scanDuplicates);
   document.getElementById('saveWorkspaceButton').addEventListener('click', saveWorkspace);
   document.getElementById('saveGroupThresholdButton').addEventListener('click', saveGroupThreshold);
   document.getElementById('closeSelectedDuplicatesButton').addEventListener('click', closeSelectedDuplicates);
@@ -353,18 +358,36 @@ function bindEvents() {
 }
 
 async function runAction(action, payload = {}, options = {}) {
+  if (action === 'organize-tabs') {
+    setMainActionLabel('正在整理...');
+    setActionStatus('正在整理当前窗口...');
+  }
+
   setBusy(true);
 
   try {
     const result = await sendMessage(action, payload);
-    setStatus(formatActionResult(action, result));
+    const message = formatActionResult(action, result);
+    setStatus(message);
+
+    if (action === 'organize-tabs') {
+      setMainActionLabel('已整理');
+      setActionStatus(message, { success: true });
+      resetMainActionLabelLater();
+    }
 
     if (options.refresh !== false) {
       // 操作后的刷新不能覆盖结果提示，否则用户看不到批量操作到底处理了多少标签。
       await loadState(Object.assign({ keepStatus: true }, options.loadStateOptions || {}));
     }
   } catch (error) {
-    setStatus(error.message || '操作失败');
+    const message = error.message || '操作失败';
+    setStatus(message);
+
+    if (action === 'organize-tabs') {
+      setMainActionLabel('整理当前窗口');
+      setActionStatus(message, { error: true });
+    }
   } finally {
     setBusy(false);
   }
@@ -384,12 +407,15 @@ async function scanDuplicates() {
 
     if (state.duplicateReview.groups.length === 0) {
       setStatus('没有发现可关闭的重复标签');
+      setActionStatus('没有发现可关闭的重复标签');
     } else {
       const closeCount = state.duplicateReview.groups.reduce((total, group) => total + group.closeCount, 0);
       setStatus(`发现 ${closeCount} 个可关闭重复标签，请确认后关闭`);
+      setActionStatus(`发现 ${closeCount} 个可关闭重复标签，请在高级管理中确认`);
     }
   } catch (error) {
     setStatus(error.message || '扫描重复标签失败');
+    setActionStatus(error.message || '扫描重复标签失败', { error: true });
   } finally {
     setBusy(false);
   }
@@ -588,9 +614,11 @@ async function saveWorkspace() {
     state.lastSavedTabIds = result.savedTabIds || [];
     state.moreToolsVisible = true;
     setStatus(`已保存 ${result.savedCount} 个标签，可选择关闭已保存标签`);
+    setActionStatus(`已保存 ${result.savedCount} 个标签，可在高级管理中关闭已保存标签`, { success: true });
     await loadState({ keepStatus: true, keepMoreToolsFocus: true });
   } catch (error) {
     setStatus(error.message || '保存工作集失败');
+    setActionStatus(error.message || '保存工作集失败', { error: true });
   } finally {
     setBusy(false);
   }
@@ -747,9 +775,14 @@ function renderOverview() {
   const allTabCount = state.overview.allTabCount || state.overview.tabCount || 0;
   const windowCount = state.overview.windowCount || 1;
   const duplicateCount = state.overview.duplicateCount;
+  const duplicateHint = document.getElementById('duplicateHintText');
+  const hasDuplicates = Number.isFinite(duplicateCount) && duplicateCount > 0;
 
   document.getElementById('quickStatusText').textContent = `${allTabCount} 个标签 · ${windowCount} 个窗口`;
-  document.getElementById('duplicateHintText').textContent = Number.isFinite(duplicateCount) && duplicateCount > 0 ? `${duplicateCount} 个重复` : '';
+  duplicateHint.textContent = hasDuplicates ? `${duplicateCount} 个重复` : '';
+  duplicateHint.hidden = !hasDuplicates;
+  duplicateHint.classList.toggle('is-hidden', !hasDuplicates);
+  duplicateHint.setAttribute('aria-label', hasDuplicates ? `发现 ${duplicateCount} 个重复标签，点击进入确认` : '没有重复标签提示');
   document.getElementById('summaryText').textContent = state.query ? '搜索所有已打开标签' : '搜索切换，或一键整理当前窗口';
 }
 
@@ -1266,7 +1299,15 @@ function renderTabs() {
   tabList.innerHTML = '';
 
   if (visibleTabs.length === 0) {
-    tabList.appendChild(createEmptyState(state.query ? '没有匹配的标签页' : '当前没有可切换的标签页'));
+    if (state.query && state.recentlyClosedTabsLoading) {
+      tabList.appendChild(createEmptyState('正在补充最近关闭记录', '已打开标签页没有匹配，稍后会继续更新结果。'));
+      return;
+    }
+
+    tabList.appendChild(createEmptyState(
+      state.query ? '没有匹配的标签页' : '当前没有可切换的标签页',
+      state.query ? '可尝试标题、网址、主域名或分组名。' : ''
+    ));
     return;
   }
 
@@ -1599,10 +1640,19 @@ function getVisibleTabs() {
   return getVisibleTabsFromState(state);
 }
 
-function createEmptyState(text) {
+function createEmptyState(text, hint = '') {
   const element = document.createElement('div');
   element.className = 'empty-state';
-  element.textContent = text;
+  const title = document.createElement('strong');
+  title.textContent = text;
+  element.appendChild(title);
+
+  if (hint) {
+    const detail = document.createElement('span');
+    detail.textContent = hint;
+    element.appendChild(detail);
+  }
+
   return element;
 }
 
@@ -1615,6 +1665,37 @@ function setBusy(isBusy) {
 
 function setStatus(text) {
   document.getElementById('statusText').textContent = text;
+}
+
+function setActionStatus(text, options = {}) {
+  const status = document.getElementById('actionStatusText');
+
+  if (!status) {
+    return;
+  }
+
+  status.textContent = text || '';
+  status.classList.toggle('is-success', Boolean(options.success && text));
+  status.classList.toggle('is-error', Boolean(options.error && text));
+}
+
+function setMainActionLabel(text) {
+  const label = document.querySelector('#organizeButton .main-action-label');
+
+  if (label) {
+    label.textContent = text;
+  }
+}
+
+function resetMainActionLabelLater() {
+  if (state.actionStatusResetTimer) {
+    window.clearTimeout(state.actionStatusResetTimer);
+  }
+
+  state.actionStatusResetTimer = window.setTimeout(() => {
+    setMainActionLabel('整理当前窗口');
+    state.actionStatusResetTimer = null;
+  }, 1800);
 }
 
 function setRuleFormStatus(text, options = {}) {

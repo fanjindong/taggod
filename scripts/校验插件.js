@@ -70,6 +70,17 @@ assert.ok(popupStructureCssContent.includes('.main-organize-action'));
 assert.ok(popupStructureCssContent.includes('.secondary-action-grid'));
 assert.ok(popupStructureCssContent.includes('.management-toggle-button'));
 assert.ok(popupStructureCssContent.includes('.quick-result-item'));
+// 首屏常用操作必须避免空状态文本占位，否则整理按钮和辅助操作之间会出现无意义留白。
+assert.ok(popupStructureCssContent.includes('.action-status-text:empty'));
+// 弹窗主体不能拉伸自动网格行，否则可用高度增加时会把各模块之间的间距放大。
+assert.match(popupStructureCssContent, /\.popup-shell\s*\{[^}]*align-content: start;[^}]*min-height: auto;/s);
+// 标题区是弹窗入口信息，不应该用大卡片高度挤占高频操作的可见空间。
+assert.match(popupStructureCssContent, /\.popup-header\s*\{\s*align-items: flex-start;\s*padding: 10px 12px;/);
+// 弹窗滚动容器很短，按钮和列表项不应使用位移或阴影过渡，否则滚动和点击会显得卡顿。
+assert.ok(!popupStructureCssContent.includes('transform 160ms'));
+assert.ok(!popupStructureCssContent.includes('box-shadow 160ms'));
+assert.ok(!popupStructureCssContent.includes('transform: translateY(1px)'));
+assert.ok(!popupStructureCssContent.includes('box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03)'));
 assert.ok(readmeStructureContent.includes('“高级管理”里新增自定义分组规则'));
 assert.ok(readmeStructureContent.includes('搜索框会自动聚焦'));
 assert.ok(readmeStructureContent.includes('最近关闭的标签页'));

@@ -18,7 +18,8 @@ const state = {
     // 扫描结果作为确认快照保存，避免用户勾选期间因刷新状态改变待关闭范围。
     visible: false,
     groups: [],
-    selectedGroupKeys: []
+    selectedGroupKeys: [],
+    resultMessage: ''
   },
   // 保存后只记录本次标签编号，用户明确点击后才关闭，避免保存动作变成隐式清场。
   lastSavedTabIds: [],
@@ -328,10 +329,12 @@ function bindEvents() {
   document.getElementById('saveWorkspaceButton').addEventListener('click', saveWorkspace);
   document.getElementById('saveGroupThresholdButton').addEventListener('click', saveGroupThreshold);
   document.getElementById('closeSelectedDuplicatesButton').addEventListener('click', closeSelectedDuplicates);
+  document.getElementById('rescanDuplicatesButton').addEventListener('click', scanDuplicates);
   document.getElementById('cancelDuplicateReviewButton').addEventListener('click', () => {
     state.duplicateReview.visible = false;
     state.duplicateReview.groups = [];
     state.duplicateReview.selectedGroupKeys = [];
+    state.duplicateReview.resultMessage = '';
     renderDuplicateReview();
   });
   document.getElementById('searchInput').addEventListener('input', (event) => {
@@ -398,20 +401,23 @@ async function scanDuplicates() {
 
   try {
     const result = await sendMessage('scan-duplicates');
-    state.moreToolsVisible = true;
     state.duplicateReview.visible = true;
     state.duplicateReview.groups = result.groups || [];
     state.duplicateReview.selectedGroupKeys = state.duplicateReview.groups.map((group) => group.duplicateKey);
-    renderMoreTools();
+    state.duplicateReview.resultMessage = '';
     renderDuplicateReview();
+    focusDuplicateReviewPanel();
 
     if (state.duplicateReview.groups.length === 0) {
+      state.duplicateReview.resultMessage = '没有发现可关闭的重复标签';
+      renderDuplicateReview();
+      focusDuplicateReviewPanel();
       setStatus('没有发现可关闭的重复标签');
       setActionStatus('没有发现可关闭的重复标签');
     } else {
       const closeCount = state.duplicateReview.groups.reduce((total, group) => total + group.closeCount, 0);
       setStatus(`发现 ${closeCount} 个可关闭重复标签，请确认后关闭`);
-      setActionStatus(`发现 ${closeCount} 个可关闭重复标签，请在高级管理中确认`);
+      setActionStatus(`发现 ${closeCount} 个可关闭重复标签，请在下方确认`);
     }
   } catch (error) {
     setStatus(error.message || '扫描重复标签失败');
@@ -437,14 +443,18 @@ async function closeSelectedDuplicates() {
 
   try {
     const result = await sendMessage('close-selected-duplicates', { tabIds });
-    state.duplicateReview.visible = false;
+    const failedCount = result.failedCount || 0;
+    const resultMessage = `已关闭 ${result.closedCount} 个重复标签，失败 ${failedCount} 个`;
+    state.duplicateReview.visible = true;
     state.duplicateReview.groups = [];
     state.duplicateReview.selectedGroupKeys = [];
-    setStatus(`已关闭 ${result.closedCount} 个重复标签，失败 ${result.failedCount || 0} 个`);
-    state.moreToolsVisible = true;
-    await loadState({ keepStatus: true, keepMoreToolsFocus: true });
+    state.duplicateReview.resultMessage = resultMessage;
+    setStatus(resultMessage);
+    setActionStatus(resultMessage, { success: failedCount === 0, error: failedCount > 0 });
+    await loadState({ keepStatus: true });
   } catch (error) {
     setStatus(error.message || '关闭重复标签失败');
+    setActionStatus(error.message || '关闭重复标签失败', { error: true });
   } finally {
     setBusy(false);
   }
@@ -563,6 +573,24 @@ function focusMoreTools() {
 
   if (state.moreToolsVisible && section && typeof section.scrollIntoView === 'function') {
     section.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function focusDuplicateReviewPanel() {
+  const section = document.getElementById('duplicateReviewSection');
+
+  if (!state.duplicateReview.visible || !section) {
+    return;
+  }
+
+  if (typeof section.scrollIntoView === 'function') {
+    // 顶部重复提示和确认面板之间可能隔着搜索结果，滚入视野能让用户立即看到下一步。
+    section.scrollIntoView({ block: 'nearest' });
+  }
+
+  if (typeof section.focus === 'function') {
+    // 面板本身只接受程序聚焦，原因是用户需要被带到确认上下文，但不应增加 Tab 导航停靠点。
+    section.focus({ preventScroll: true });
   }
 }
 
@@ -1240,15 +1268,37 @@ function renderGroups() {
 function renderDuplicateReview() {
   const section = document.getElementById('duplicateReviewSection');
   const list = document.getElementById('duplicateReviewList');
+  const help = document.getElementById('duplicateReviewHelp');
+  const result = document.getElementById('duplicateReviewResult');
+  const closeButton = document.getElementById('closeSelectedDuplicatesButton');
+  const rescanButton = document.getElementById('rescanDuplicatesButton');
+  const cancelButton = document.getElementById('cancelDuplicateReviewButton');
   const totalCloseCount = state.duplicateReview.groups.reduce((total, group) => total + group.closeCount, 0);
+  const selectedCloseCount = getSelectedDuplicateCloseCount();
+  const hasResult = Boolean(state.duplicateReview.resultMessage);
 
   section.classList.toggle('is-hidden', !state.duplicateReview.visible);
-  // 当前任务不修改样式文件，因此同步设置 hidden，确保确认区在样式补充前也不会误显示。
+  // 同步 hidden 是为了让辅助技术和旧版浏览器都不会读到收起的确认区。
   section.hidden = !state.duplicateReview.visible;
-  document.getElementById('duplicateReviewCount').textContent = `${totalCloseCount} 个可关闭`;
+  document.getElementById('duplicateReviewCount').textContent = hasResult ? '处理完成' : `${totalCloseCount} 个可关闭`;
   list.innerHTML = '';
+  result.textContent = state.duplicateReview.resultMessage;
+  result.classList.toggle('is-hidden', !hasResult);
+  result.hidden = !hasResult;
+  help.classList.toggle('is-hidden', hasResult);
+  help.hidden = hasResult;
+  closeButton.textContent = selectedCloseCount > 0 ? `关闭已选 ${selectedCloseCount} 个` : '关闭已选重复标签';
+  closeButton.classList.toggle('is-hidden', hasResult);
+  closeButton.hidden = hasResult;
+  rescanButton.classList.toggle('is-hidden', !hasResult);
+  rescanButton.hidden = !hasResult;
+  cancelButton.textContent = hasResult ? '关闭' : '取消';
 
   if (!state.duplicateReview.visible) {
+    return;
+  }
+
+  if (hasResult) {
     return;
   }
 
@@ -1284,8 +1334,20 @@ function renderDuplicateReview() {
       } else {
         state.duplicateReview.selectedGroupKeys = state.duplicateReview.selectedGroupKeys.filter((key) => key !== duplicateKey);
       }
+
+      renderDuplicateReview();
     });
   });
+}
+
+function getSelectedDuplicateCloseCount() {
+  return state.duplicateReview.groups.reduce((total, group) => {
+    if (!state.duplicateReview.selectedGroupKeys.includes(group.duplicateKey)) {
+      return total;
+    }
+
+    return total + group.closeCount;
+  }, 0);
 }
 
 function renderTabs() {

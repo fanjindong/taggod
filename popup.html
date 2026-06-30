@@ -70,6 +70,22 @@
           <button id="scanDuplicatesButton" type="button" title="智能去重会先确认，不会直接关闭。">智能去重</button>
           <button id="saveWorkspaceButton" type="button">保存工作集</button>
         </div>
+        <section id="duplicateReviewSection" class="list-section duplicate-review-panel is-hidden" aria-label="重复标签确认" tabindex="-1" hidden>
+          <div class="section-title">
+            <div class="section-title-main">
+              <h2>重复页面清理</h2>
+            </div>
+            <span id="duplicateReviewCount">0 个可关闭</span>
+          </div>
+          <p id="duplicateReviewHelp" class="helper-text duplicate-review-help">默认保留固定标签、当前标签或最左侧标签。</p>
+          <p id="duplicateReviewResult" class="duplicate-review-result is-hidden" role="status" hidden></p>
+          <div id="duplicateReviewList" class="duplicate-review-list"></div>
+          <div class="review-actions">
+            <button id="closeSelectedDuplicatesButton" class="danger-button" type="button">关闭已选重复标签</button>
+            <button id="rescanDuplicatesButton" type="button">重新扫描</button>
+            <button id="cancelDuplicateReviewButton" type="button">取消</button>
+          </div>
+        </section>
         <div class="quick-action-footer">
           <button id="moreToolsButton" class="management-toggle-button" type="button" aria-expanded="false" aria-controls="moreToolsSection">高级管理</button>
         </div>
@@ -148,18 +164,6 @@
         </section>
 
         <div class="management-section-label">保存与清理</div>
-        <section id="duplicateReviewSection" class="list-section is-hidden" aria-label="重复标签确认" hidden>
-          <div class="section-title">
-            <h2>重复确认</h2>
-            <span id="duplicateReviewCount">0 个可关闭</span>
-          </div>
-          <div id="duplicateReviewList" class="duplicate-review-list"></div>
-          <div class="review-actions">
-            <button id="closeSelectedDuplicatesButton" class="danger-button" type="button">关闭已勾选重复标签</button>
-            <button id="cancelDuplicateReviewButton" type="button">取消</button>
-          </div>
-        </section>
-
         <section class="list-section">
           <div class="section-title">
             <h2>工作集</h2>

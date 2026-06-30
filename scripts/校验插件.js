@@ -66,6 +66,13 @@ assert.ok(popupStructureHtmlContent.includes('>高级管理</button>'));
 assert.ok(!popupStructureHtmlContent.includes('<h2>管理操作</h2>'));
 assert.strictEqual((popupStructureHtmlContent.match(/id="scanDuplicatesButton"/g) || []).length, 1);
 assert.strictEqual((popupStructureHtmlContent.match(/id="saveWorkspaceButton"/g) || []).length, 1);
+// 重复清理是当前窗口即时操作，应在首屏常用操作区内确认，避免把用户带到高级管理。
+assert.ok(popupStructureHtmlContent.indexOf('id="duplicateReviewSection"') > popupStructureHtmlContent.indexOf('class="quick-action-area"'));
+assert.ok(popupStructureHtmlContent.indexOf('id="duplicateReviewSection"') < popupStructureHtmlContent.indexOf('id="moreToolsSection"'));
+assert.ok(popupStructureHtmlContent.includes('id="duplicateReviewHelp"'));
+assert.ok(popupStructureHtmlContent.includes('id="duplicateReviewResult"'));
+assert.ok(popupStructureHtmlContent.includes('id="rescanDuplicatesButton"'));
+assert.ok(popupStructureHtmlContent.includes('tabindex="-1"'));
 assert.ok(popupStructureCssContent.includes('.main-organize-action'));
 assert.ok(popupStructureCssContent.includes('.secondary-action-grid'));
 assert.ok(popupStructureCssContent.includes('.management-toggle-button'));
@@ -81,6 +88,7 @@ assert.ok(!popupStructureCssContent.includes('transform 160ms'));
 assert.ok(!popupStructureCssContent.includes('box-shadow 160ms'));
 assert.ok(!popupStructureCssContent.includes('transform: translateY(1px)'));
 assert.ok(!popupStructureCssContent.includes('box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03)'));
+assert.ok(popupStructureCssContent.includes('.duplicate-review-panel'));
 assert.ok(readmeStructureContent.includes('“高级管理”里新增自定义分组规则'));
 assert.ok(readmeStructureContent.includes('搜索框会自动聚焦'));
 assert.ok(readmeStructureContent.includes('最近关闭的标签页'));
@@ -1199,6 +1207,10 @@ assert.strictEqual(popupSandbox.createDefaultGroupRuleDraft().conditionTree.logi
 assert.strictEqual(popupSandbox.createDefaultGroupRuleDraft().conditionTree.children[0].type, 'condition');
 assert.strictEqual(typeof popupSandbox.moveGroupRuleWithoutReload, 'function');
 assert.strictEqual(typeof popupSandbox.applyGroupRuleMutationWithoutReload, 'function');
+const popupJsContent = fs.readFileSync(popupPath, 'utf8');
+assert.ok(!popupJsContent.includes('请在高级管理中确认'));
+assert.ok(popupJsContent.includes('function focusDuplicateReviewPanel()'));
+assert.ok(popupJsContent.includes('focusDuplicateReviewPanel();'));
 
 const popupHtml = fs.readFileSync(path.join(rootDir, 'popup.html'), 'utf8');
 const popupCssContent = fs.readFileSync(path.join(rootDir, 'popup.css'), 'utf8');

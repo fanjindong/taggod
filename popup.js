@@ -1236,29 +1236,67 @@ function renderGroups() {
     return;
   }
 
+  const starredGroups = state.groups.filter((group) => group.starred);
+
   state.groups.forEach((group) => {
     const item = document.createElement('article');
     item.className = 'group-item';
     const groupTooltip = group.title === group.groupKey ? group.groupKey : `${group.title}（${group.groupKey}）`;
+    const priorityIndex = starredGroups.findIndex((item) => item.groupKey === group.groupKey);
+    const canMoveUp = priorityIndex > 0;
+    const canMoveDown = priorityIndex >= 0 && priorityIndex < starredGroups.length - 1;
+    const moveButtons = group.starred ? `
+        <button
+          class="group-order-button"
+          type="button"
+          data-action="move-priority-up"
+          data-group-key="${escapeHtml(group.groupKey)}"
+          data-static-disabled="${canMoveUp ? 'false' : 'true'}"
+          ${canMoveUp ? '' : 'disabled'}
+          title="上移优先分组"
+          aria-label="上移优先分组"
+        >↑</button>
+        <button
+          class="group-order-button"
+          type="button"
+          data-action="move-priority-down"
+          data-group-key="${escapeHtml(group.groupKey)}"
+          data-static-disabled="${canMoveDown ? 'false' : 'true'}"
+          ${canMoveDown ? '' : 'disabled'}
+          title="下移优先分组"
+          aria-label="下移优先分组"
+        >↓</button>` : '';
+
     item.innerHTML = `
       <div class="group-main">
         <span class="group-title" title="${escapeHtml(groupTooltip)}">${escapeHtml(group.title)}</span>
         <span class="group-meta">${group.tabCount} 个标签${group.starred ? ' · 优先' : ''}</span>
       </div>
-      <button
-        class="star-button${group.starred ? ' is-active' : ''}"
-        type="button"
-        data-group-key="${escapeHtml(group.groupKey)}"
-        title="${group.starred ? '取消优先' : '设为优先'}"
-        aria-label="${group.starred ? '取消优先分组' : '设为优先分组'}"
-      >${group.starred ? '★' : '☆'}</button>
+      <div class="group-actions">
+        ${moveButtons}
+        <button
+          class="star-button${group.starred ? ' is-active' : ''}"
+          type="button"
+          data-action="toggle-priority"
+          data-group-key="${escapeHtml(group.groupKey)}"
+          title="${group.starred ? '取消优先' : '设为优先'}"
+          aria-label="${group.starred ? '取消优先分组' : '设为优先分组'}"
+        >${group.starred ? '★' : '☆'}</button>
+      </div>
     `;
     groupList.appendChild(item);
   });
 
   groupList.querySelectorAll('button[data-group-key]').forEach((button) => {
     button.addEventListener('click', () => {
-      runAction('toggle-priority-group', { groupKey: button.dataset.groupKey }, {
+      const action = button.dataset.action === 'move-priority-up' || button.dataset.action === 'move-priority-down'
+        ? 'move-priority-group'
+        : 'toggle-priority-group';
+      const payload = action === 'move-priority-group'
+        ? { groupKey: button.dataset.groupKey, direction: button.dataset.action === 'move-priority-down' ? 'down' : 'up' }
+        : { groupKey: button.dataset.groupKey };
+
+      runAction(action, payload, {
         loadStateOptions: { keepMoreToolsFocus: true }
       });
     });
@@ -1800,6 +1838,10 @@ function formatActionResult(action, result) {
 
   if (action === 'toggle-priority-group') {
     return result.starred ? `已将 ${result.groupKey} 设为优先分组` : `已取消 ${result.groupKey} 的优先分组`;
+  }
+
+  if (action === 'move-priority-group') {
+    return result.moved ? '已调整优先分组顺序' : '优先分组顺序未变化';
   }
 
   if (action === 'activate-tab') {

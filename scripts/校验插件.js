@@ -584,6 +584,21 @@ const organizedTabsWithSoloFirst = backgroundSandbox.buildOrganizedTabs([
 });
 assert.deepStrictEqual(Array.from(organizedTabsWithSoloFirst, (tab) => tab.id), [306, 303, 302, 304, 305, 301]);
 
+const organizedTabsWithSavedPriorityOrder = backgroundSandbox.buildOrganizedTabs([
+  { id: 311, url: 'https://mail.google.com/inbox', pinned: false, index: 0 },
+  { id: 312, url: 'https://docs.google.com/document', pinned: false, index: 1 },
+  { id: 313, url: 'https://github.com/example/repo', pinned: false, index: 2 },
+  { id: 314, url: 'https://github.com/example/repo/issues', pinned: false, index: 3 }
+], {
+  minTabsPerGroup: 2,
+  priorityGroups: [
+    { groupKey: 'google.com', sortOrder: 1 },
+    { groupKey: 'github.com', sortOrder: 0 }
+  ]
+});
+// 显式保存的优先分组顺序必须覆盖当前标签栏顺序，否则高级管理里的排序按钮没有实际意义。
+assert.deepStrictEqual(Array.from(organizedTabsWithSavedPriorityOrder, (tab) => tab.id), [313, 314, 312, 311]);
+
 const customRuleSettings = backgroundSandbox.normalizeSettings({
   minTabsPerGroup: 3,
   priorityGroups: [],
@@ -1211,6 +1226,8 @@ const popupJsContent = fs.readFileSync(popupPath, 'utf8');
 assert.ok(!popupJsContent.includes('请在高级管理中确认'));
 assert.ok(popupJsContent.includes('function focusDuplicateReviewPanel()'));
 assert.ok(popupJsContent.includes('focusDuplicateReviewPanel();'));
+assert.ok(popupJsContent.includes('move-priority-group'));
+assert.ok(popupJsContent.includes('group-order-button'));
 
 const popupHtml = fs.readFileSync(path.join(rootDir, 'popup.html'), 'utf8');
 const popupCssContent = fs.readFileSync(path.join(rootDir, 'popup.css'), 'utf8');
@@ -1281,6 +1298,29 @@ assert.ok(usageSvgContent.includes('满足全部或满足任一'));
 
 async function runAsyncChecks() {
   await assertPopupDirectStateContract();
+
+  let storedSettingsForPriorityMove = {
+    priorityGroups: [
+      { groupKey: 'google.com', sortOrder: 0, starredAt: 1 },
+      { groupKey: 'github.com', sortOrder: 1, starredAt: 2 }
+    ]
+  };
+  backgroundSandbox.chrome.storage = {
+    local: {
+      get: async () => ({
+        'tabgod.settings': storedSettingsForPriorityMove
+      }),
+      set: async (nextStored) => {
+        storedSettingsForPriorityMove = nextStored['tabgod.settings'];
+      }
+    }
+  };
+
+  const priorityMoveResult = await backgroundSandbox.movePriorityGroup('github.com', 'up');
+
+  assert.strictEqual(priorityMoveResult.moved, true);
+  assert.deepStrictEqual(Array.from(storedSettingsForPriorityMove.priorityGroups, (group) => group.groupKey), ['github.com', 'google.com']);
+  assert.deepStrictEqual(Array.from(storedSettingsForPriorityMove.priorityGroups, (group) => group.sortOrder), [0, 1]);
 
   const groupOperations = {
     grouped: [],

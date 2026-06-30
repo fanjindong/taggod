@@ -458,15 +458,47 @@ function normalizeGroupRules(groupRules) {
   });
 }
 
+function normalizePriorityGroups(priorityGroups) {
+  if (!Array.isArray(priorityGroups)) {
+    return [];
+  }
+
+  const usedGroupKeys = new Set();
+
+  return priorityGroups.map((group, index) => {
+    const groupKey = String(group && group.groupKey ? group.groupKey : '').trim();
+
+    if (!groupKey || usedGroupKeys.has(groupKey)) {
+      // 重复分组键会让显式顺序出现歧义，保留第一条更符合用户在列表中看到的顺序。
+      return null;
+    }
+
+    usedGroupKeys.add(groupKey);
+
+    return {
+      groupKey,
+      title: String(group && group.title ? group.title : groupKey).trim() || groupKey,
+      starredAt: Number(group && group.starredAt) || Date.now(),
+      // 旧版本没有 sortOrder，按原数组位置迁移，原因是原数组顺序就是用户逐个星标后的唯一稳定顺序。
+      sortOrder: Number.isInteger(group && group.sortOrder) && group.sortOrder >= 0 ? group.sortOrder : index
+    };
+  }).filter(Boolean).sort((left, right) => {
+    if (left.sortOrder !== right.sortOrder) {
+      return left.sortOrder - right.sortOrder;
+    }
+
+    return left.starredAt - right.starredAt;
+  }).map((group, index) => Object.assign({}, group, {
+    // 重新压紧编号可以避免删除或历史异常数据留下空洞，后续上移下移只需要交换数组项。
+    sortOrder: index
+  }));
+}
+
 function normalizeSettings(settings) {
   const normalized = Object.assign({}, DEFAULT_SETTINGS, settings || {});
   normalized.minTabsPerGroup = normalizeMinTabsPerGroup(normalized.minTabsPerGroup);
 
-  if (!Array.isArray(normalized.priorityGroups)) {
-    // 旧版本没有该字段，兜底为空数组可以兼容已经安装过的用户配置。
-    normalized.priorityGroups = [];
-  }
-
+  normalized.priorityGroups = normalizePriorityGroups(normalized.priorityGroups);
   normalized.groupRules = normalizeGroupRules(normalized.groupRules);
 
   return normalized;
@@ -666,6 +698,18 @@ function isPriorityGroup(settings, groupKey) {
   return settings.priorityGroups.some((group) => group.groupKey === groupKey);
 }
 
+function buildPriorityGroupOrderMap(settings) {
+  const normalizedSettings = normalizeSettings(settings);
+  const orderMap = new Map();
+
+  normalizedSettings.priorityGroups.forEach((group, index) => {
+    // 使用归一化后的连续编号，避免历史配置里的空洞影响实际排序。
+    orderMap.set(group.groupKey, Number.isInteger(group.sortOrder) ? group.sortOrder : index);
+  });
+
+  return orderMap;
+}
+
 function buildCurrentGroupOrderMap(tabs, settings = DEFAULT_SETTINGS) {
   const normalizedSettings = normalizeSettings(settings);
   const orderMap = new Map();
@@ -713,6 +757,7 @@ function buildOrganizedTabs(tabs, settings) {
   const safeTabs = Array.isArray(tabs) ? tabs : [];
   const normalizedSettings = normalizeSettings(settings);
   const currentGroupOrderMap = buildCurrentGroupOrderMap(safeTabs, normalizedSettings);
+  const priorityGroupOrderMap = buildPriorityGroupOrderMap(normalizedSettings);
   const groupableDomainSet = buildGroupableDomainSet(safeTabs, normalizedSettings);
 
   return [...safeTabs].sort((left, right) => {
@@ -737,6 +782,16 @@ function buildOrganizedTabs(tabs, settings) {
 
     if (leftIsPriority !== rightIsPriority) {
       return leftIsPriority ? -1 : 1;
+    }
+
+    if (leftIsPriority && rightIsPriority) {
+      const leftPriorityRank = priorityGroupOrderMap.get(leftDomain) ?? Number.POSITIVE_INFINITY;
+      const rightPriorityRank = priorityGroupOrderMap.get(rightDomain) ?? Number.POSITIVE_INFINITY;
+
+      if (leftPriorityRank !== rightPriorityRank) {
+        // 高级管理里保存的顺序应覆盖当前标签栏顺序，否则上移下移不会影响下一次整理结果。
+        return leftPriorityRank - rightPriorityRank;
+      }
     }
 
     const leftCurrentRank = currentGroupOrderMap.get(leftDomain) ?? Number.POSITIVE_INFINITY;
@@ -1090,6 +1145,7 @@ function buildGroupSummaries(tabs, settings) {
   const normalizedSettings = normalizeSettings(settings);
   const groupMap = new Map();
   const currentGroupOrderMap = buildCurrentGroupOrderMap(tabs, normalizedSettings);
+  const priorityGroupOrderMap = buildPriorityGroupOrderMap(normalizedSettings);
 
   tabs.forEach((tab) => {
     if (tab.pinned || typeof tab.id !== 'number') {
@@ -1123,6 +1179,16 @@ function buildGroupSummaries(tabs, settings) {
   return groupSummaries.sort((left, right) => {
     if (left.starred !== right.starred) {
       return left.starred ? -1 : 1;
+    }
+
+    if (left.starred && right.starred) {
+      const leftPriorityRank = priorityGroupOrderMap.get(left.groupKey) ?? Number.POSITIVE_INFINITY;
+      const rightPriorityRank = priorityGroupOrderMap.get(right.groupKey) ?? Number.POSITIVE_INFINITY;
+
+      if (leftPriorityRank !== rightPriorityRank) {
+        // 列表顺序必须和整理顺序一致，用户才知道上移下移会产生什么结果。
+        return leftPriorityRank - rightPriorityRank;
+      }
     }
 
     if (left.currentOrder !== right.currentOrder) {
@@ -1323,11 +1389,16 @@ async function togglePriorityGroup(groupKey) {
 
   if (existingIndex >= 0) {
     settings.priorityGroups.splice(existingIndex, 1);
+    settings.priorityGroups = settings.priorityGroups.map((group, index) => Object.assign({}, group, {
+      // 取消星标后压紧顺序，避免再次上移下移时历史空洞影响用户看到的位置。
+      sortOrder: index
+    }));
   } else {
     settings.priorityGroups.push({
       groupKey,
       title: groupKey,
-      starredAt: Date.now()
+      starredAt: Date.now(),
+      sortOrder: settings.priorityGroups.length
     });
     starred = true;
   }
@@ -1338,6 +1409,43 @@ async function togglePriorityGroup(groupKey) {
     groupKey,
     starred,
     priorityCount: settings.priorityGroups.length
+  };
+}
+
+async function movePriorityGroup(groupKey, direction) {
+  let moved = false;
+  let movedGroup = null;
+  const settings = await updateStoredSettings((settings) => {
+    const groupIndex = settings.priorityGroups.findIndex((group) => group.groupKey === groupKey);
+
+    if (groupIndex < 0) {
+      throw new Error('没有找到要移动的优先分组');
+    }
+
+    movedGroup = settings.priorityGroups[groupIndex];
+    const targetIndex = direction === 'down' ? groupIndex + 1 : groupIndex - 1;
+
+    if (targetIndex < 0 || targetIndex >= settings.priorityGroups.length) {
+      // 边界移动保持幂等，原因是用户重复点击首项上移或末项下移时不应看到错误。
+      return settings;
+    }
+
+    const nextPriorityGroups = settings.priorityGroups.slice();
+    nextPriorityGroups[groupIndex] = nextPriorityGroups[targetIndex];
+    nextPriorityGroups[targetIndex] = movedGroup;
+    moved = true;
+
+    return Object.assign({}, settings, {
+      priorityGroups: nextPriorityGroups.map((group, index) => Object.assign({}, group, {
+        sortOrder: index
+      }))
+    });
+  });
+
+  return {
+    group: movedGroup,
+    moved,
+    settings
   };
 }
 
@@ -1896,6 +2004,10 @@ async function handleMessage(message) {
 
   if (action === 'toggle-priority-group') {
     return togglePriorityGroup(message.groupKey);
+  }
+
+  if (action === 'move-priority-group') {
+    return movePriorityGroup(message.groupKey, message.direction);
   }
 
   if (action === 'create-group-rule') {

@@ -30,6 +30,8 @@ const state = {
   recentlyClosedTabsLoading: false,
   managementLoaded: false,
   managementLoading: false,
+  // 高级管理默认只展示摘要，用户点开某一项后再显示详情，避免低频操作同时占满弹窗。
+  activeManagementPanel: '',
   duplicateOverviewScheduled: false,
   sortHelpVisible: false,
   actionStatusResetTimer: null,
@@ -292,6 +294,8 @@ async function loadManagementState(options = {}) {
     renderGroupRuleForm();
     renderGroups();
     renderSessions();
+    renderSavedCleanup();
+    renderManagementOverview();
     renderMoreTools();
   } catch (error) {
     if (!options.keepStatus) {
@@ -349,6 +353,9 @@ function bindEvents() {
   document.getElementById('searchInput').addEventListener('keydown', handleSearchKeydown);
   document.getElementById('sortHelpButton').addEventListener('click', toggleSortHelp);
   document.getElementById('moreToolsButton').addEventListener('click', toggleMoreTools);
+  document.querySelectorAll('[data-management-panel-button]').forEach((button) => {
+    button.addEventListener('click', () => toggleManagementPanel(button.dataset.managementPanelButton));
+  });
   document.getElementById('newGroupRuleButton').addEventListener('click', openNewGroupRuleForm);
   document.getElementById('groupRuleForm').addEventListener('submit', saveGroupRule);
   document.getElementById('cancelGroupRuleButton').addEventListener('click', closeGroupRuleForm);
@@ -562,6 +569,73 @@ function renderMoreTools() {
   }
 }
 
+function toggleManagementPanel(panelName) {
+  const nextPanelName = state.activeManagementPanel === panelName ? '' : panelName;
+  state.activeManagementPanel = nextPanelName;
+  renderManagementOverview();
+
+  if (!nextPanelName) {
+    return;
+  }
+
+  const panel = document.querySelector(`[data-management-panel="${nextPanelName}"]`);
+
+  if (panel && typeof panel.scrollIntoView === 'function') {
+    // 高级管理位于弹窗底部，展开具体面板后滚到最近位置可以避免用户误以为没有响应。
+    panel.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function renderManagementOverview() {
+  const rules = state.settings.groupRules || [];
+  const starredGroupCount = state.groups.filter((group) => group.starred).length;
+  const savedTabCount = state.lastSavedTabIds.length;
+  const summaries = [
+    {
+      key: 'rules',
+      textId: 'managementRulesSummaryText',
+      text: `全局阈值 ${state.settings.minTabsPerGroup || 2}，已有 ${rules.length} 条规则`
+    },
+    {
+      key: 'priority',
+      textId: 'managementPrioritySummaryText',
+      text: state.groups.length > 0 ? `已设 ${starredGroupCount} 个优先分组，共 ${state.groups.length} 个分组` : '当前窗口还没有可整理分组'
+    },
+    {
+      key: 'workspace',
+      textId: 'managementWorkspaceSummaryText',
+      text: state.sessions.length > 0 ? `已保存 ${state.sessions.length} 个工作集` : '还没有保存过工作集'
+    },
+    {
+      key: 'cleanup',
+      textId: 'managementCleanupSummaryText',
+      text: savedTabCount > 0 ? `可关闭 ${savedTabCount} 个已保存标签` : '暂无待处理清理'
+    }
+  ];
+
+  summaries.forEach((summary) => {
+    const isActive = state.activeManagementPanel === summary.key;
+    const button = document.querySelector(`[data-management-panel-button="${summary.key}"]`);
+    const panel = document.querySelector(`[data-management-panel="${summary.key}"]`);
+    const text = document.getElementById(summary.textId);
+
+    if (text) {
+      text.textContent = summary.text;
+    }
+
+    if (button) {
+      button.classList.toggle('is-active', isActive);
+      button.setAttribute('aria-expanded', isActive ? 'true' : 'false');
+    }
+
+    if (panel) {
+      panel.classList.toggle('is-hidden', !isActive);
+      // 同步 hidden 是为了让收起的低频面板不被辅助技术误读。
+      panel.hidden = !isActive;
+    }
+  });
+}
+
 function focusMoreTools() {
   const section = document.getElementById('moreToolsSection');
   const button = document.getElementById('moreToolsButton');
@@ -641,6 +715,7 @@ async function saveWorkspace() {
     const result = await sendMessage('save-workspace', { name: trimmedName });
     state.lastSavedTabIds = result.savedTabIds || [];
     state.moreToolsVisible = true;
+    state.activeManagementPanel = 'cleanup';
     setStatus(`已保存 ${result.savedCount} 个标签，可选择关闭已保存标签`);
     setActionStatus(`已保存 ${result.savedCount} 个标签，可在高级管理中关闭已保存标签`, { success: true });
     await loadState({ keepStatus: true, keepMoreToolsFocus: true });
@@ -693,6 +768,8 @@ function render() {
     renderGroupRuleForm();
     renderGroups();
     renderSessions();
+    renderSavedCleanup();
+    renderManagementOverview();
   }
   renderDuplicateReview();
   renderTabs();
@@ -945,10 +1022,12 @@ function updateGroupRuleFormPreview() {
 }
 
 function openNewGroupRuleForm() {
+  state.activeManagementPanel = 'rules';
   state.ruleEditor.visible = true;
   state.ruleEditor.editingRuleId = '';
   state.ruleEditor.draft = createDefaultGroupRuleDraft();
   renderGroupRuleForm();
+  renderManagementOverview();
 }
 
 function closeGroupRuleForm() {
@@ -1153,6 +1232,7 @@ async function saveGroupRule(event) {
     setRuleFormStatus(`已保存分组规则：${rule.name || rule.targetTitle}`);
     closeGroupRuleForm();
     renderGroupRules();
+    renderManagementOverview();
     setStatus(`已保存分组规则：${rule.name || rule.targetTitle}`);
   } catch (error) {
     setRuleFormStatus(error.message || '保存分组规则失败', { error: true });
@@ -1171,6 +1251,7 @@ async function handleGroupRuleAction(action, ruleId) {
   }
 
   if (action === 'edit-rule') {
+    state.activeManagementPanel = 'rules';
     state.ruleEditor.visible = true;
     state.ruleEditor.editingRuleId = ruleId;
     state.ruleEditor.draft = {
@@ -1181,6 +1262,7 @@ async function handleGroupRuleAction(action, ruleId) {
       conditionTree: JSON.parse(JSON.stringify(rule.conditionTree || createDefaultConditionGroup('and')))
     };
     renderGroupRuleForm();
+    renderManagementOverview();
     return;
   }
 
@@ -1218,6 +1300,7 @@ async function applyGroupRuleMutationWithoutReload(action, payload) {
     const result = await sendMessage(action, payload);
     state.settings = result.settings || state.settings;
     renderGroupRules();
+    renderManagementOverview();
     setStatus(formatActionResult(action, result));
   } catch (error) {
     setStatus(error.message || '更新分组规则失败');
@@ -1449,15 +1532,6 @@ function renderSessions() {
   const sessionList = document.getElementById('sessionList');
   sessionList.innerHTML = '';
 
-  if (state.lastSavedTabIds.length > 0) {
-    const closeSavedButton = document.createElement('button');
-    closeSavedButton.className = 'close-saved-button danger-button';
-    closeSavedButton.type = 'button';
-    closeSavedButton.textContent = '关闭已保存标签';
-    closeSavedButton.addEventListener('click', closeLastSavedTabs);
-    sessionList.appendChild(closeSavedButton);
-  }
-
   if (state.sessions.length === 0) {
     sessionList.appendChild(createEmptyState('还没有保存过工作集'));
     return;
@@ -1485,6 +1559,28 @@ function renderSessions() {
   sessionList.querySelectorAll('button[data-session-id]').forEach((button) => {
     button.addEventListener('click', () => handleWorkspaceAction(button.dataset.action, button.dataset.sessionId));
   });
+}
+
+function renderSavedCleanup() {
+  const cleanupAction = document.getElementById('savedCleanupAction');
+
+  if (!cleanupAction) {
+    return;
+  }
+
+  cleanupAction.innerHTML = '';
+
+  if (state.lastSavedTabIds.length === 0) {
+    cleanupAction.appendChild(createEmptyState('没有待关闭的已保存标签', '保存工作集后，可以在这里关闭本次已保存的标签。'));
+    return;
+  }
+
+  const closeSavedButton = document.createElement('button');
+  closeSavedButton.className = 'close-saved-button danger-button';
+  closeSavedButton.type = 'button';
+  closeSavedButton.textContent = `关闭 ${state.lastSavedTabIds.length} 个已保存标签`;
+  closeSavedButton.addEventListener('click', closeLastSavedTabs);
+  cleanupAction.appendChild(closeSavedButton);
 }
 
 async function handleWorkspaceAction(action, sessionId) {

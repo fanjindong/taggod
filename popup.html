@@ -92,84 +92,129 @@
       </section>
 
       <section id="moreToolsSection" class="more-tools-section is-hidden" aria-label="高级管理" hidden>
-        <div class="management-section-label">整理设置</div>
-        <section class="settings-strip" aria-label="整理设置">
-          <label class="setting-field" for="minTabsPerGroupInput">
-            <span>分组阈值</span>
-            <input id="minTabsPerGroupInput" type="number" min="1" step="1" inputmode="numeric">
-          </label>
-          <span class="setting-unit">个标签</span>
-          <button id="saveGroupThresholdButton" class="compact-button" type="button">保存</button>
-        </section>
+        <div class="management-overview" aria-label="高级管理总览">
+          <section class="management-summary-item">
+            <button id="managementRulesSummary" class="management-summary-button" type="button" data-management-panel-button="rules" aria-expanded="false" aria-controls="managementRulesPanel">
+              <span class="management-summary-main">
+                <strong>整理规则</strong>
+                <span id="managementRulesSummaryText">全局阈值与自定义分组规则</span>
+              </span>
+              <span class="management-summary-action">管理</span>
+            </button>
+            <section id="managementRulesPanel" class="management-panel is-hidden" data-management-panel="rules" aria-label="整理规则" hidden>
+              <section class="settings-strip" aria-label="整理设置">
+                <label class="setting-field" for="minTabsPerGroupInput">
+                  <span>分组阈值</span>
+                  <input id="minTabsPerGroupInput" type="number" min="1" step="1" inputmode="numeric">
+                </label>
+                <span class="setting-unit">个标签</span>
+                <button id="saveGroupThresholdButton" class="compact-button" type="button">保存</button>
+              </section>
 
-        <div class="management-section-label">规则与排序</div>
-        <section class="list-section group-rule-section" aria-label="分组规则">
-          <div class="section-title">
-            <h2>分组规则</h2>
-            <button id="newGroupRuleButton" class="compact-button" type="button">新增分组规则</button>
-          </div>
-          <p class="helper-text section-helper-text">规则从上到下匹配，第一条命中决定标签归到哪个分组。</p>
-
-          <form id="groupRuleForm" class="group-rule-form is-hidden" hidden>
-            <label class="rule-field">
-              <span>规则名称</span>
-              <input id="groupRuleNameInput" type="text" placeholder="默认使用目标分组名">
-              <small id="groupRuleNamePreview">未填写时会使用目标分组名。</small>
-            </label>
-
-            <label class="rule-field">
-              <span>目标分组名</span>
-              <input id="groupRuleTargetTitleInput" type="text" placeholder="例如：项目 A">
-              <small>用于创建分组标题，也会生成稳定的自定义分组标识。</small>
-            </label>
-
-            <label class="rule-field">
-              <span>分组阈值</span>
-              <input id="groupRuleThresholdInput" type="number" min="1" step="1" inputmode="numeric" placeholder="留空使用全局阈值">
-              <small id="groupRuleThresholdHelp">当前全局：至少 2 个标签。</small>
-            </label>
-
-            <label class="rule-toggle">
-              <input id="groupRuleEnabledInput" type="checkbox" checked>
-              <span>启用此规则</span>
-            </label>
-
-            <div class="condition-editor" aria-label="匹配条件">
-              <div class="condition-editor-header">
-                <span>条件组</span>
-                <div class="inline-actions">
-                  <button id="addRuleConditionButton" class="compact-button" type="button">添加条件</button>
-                  <button id="addRuleGroupButton" class="compact-button" type="button">添加条件组</button>
+              <section class="list-section group-rule-section" aria-label="分组规则">
+                <div class="section-title">
+                  <h2>分组规则</h2>
+                  <button id="newGroupRuleButton" class="compact-button" type="button">新增分组规则</button>
                 </div>
-              </div>
-              <div id="groupRuleConditionList" class="condition-list"></div>
-              <p class="helper-text">条件组可选择满足全部或满足任一；条件值没有默认值，必须填写后才会参与匹配。</p>
-            </div>
+                <p class="helper-text section-helper-text">规则从上到下匹配，第一条命中决定标签归到哪个分组。</p>
 
-            <div class="inline-actions">
-              <button id="saveGroupRuleButton" class="primary-action" type="submit">保存规则</button>
-              <button id="cancelGroupRuleButton" type="button">取消</button>
-            </div>
-            <p id="groupRuleFormStatus" class="helper-text rule-form-status" role="status"></p>
-          </form>
+                <form id="groupRuleForm" class="group-rule-form is-hidden" hidden>
+                  <label class="rule-field">
+                    <span>规则名称</span>
+                    <input id="groupRuleNameInput" type="text" placeholder="默认使用目标分组名">
+                    <small id="groupRuleNamePreview">未填写时会使用目标分组名。</small>
+                  </label>
 
-          <div id="groupRuleList" class="group-rule-list"></div>
-        </section>
+                  <label class="rule-field">
+                    <span>目标分组名</span>
+                    <input id="groupRuleTargetTitleInput" type="text" placeholder="例如：项目 A">
+                    <small>用于创建分组标题，也会生成稳定的自定义分组标识。</small>
+                  </label>
 
-        <section class="list-section">
-          <div class="section-title">
-            <h2>优先分组</h2>
-          </div>
-          <div id="groupList" class="group-list"></div>
-        </section>
+                  <label class="rule-field">
+                    <span>分组阈值</span>
+                    <input id="groupRuleThresholdInput" type="number" min="1" step="1" inputmode="numeric" placeholder="留空使用全局阈值">
+                    <small id="groupRuleThresholdHelp">当前全局：至少 2 个标签。</small>
+                  </label>
 
-        <div class="management-section-label">保存与清理</div>
-        <section class="list-section">
-          <div class="section-title">
-            <h2>工作集</h2>
-          </div>
-          <div id="sessionList" class="session-list"></div>
-        </section>
+                  <label class="rule-toggle">
+                    <input id="groupRuleEnabledInput" type="checkbox" checked>
+                    <span>启用此规则</span>
+                  </label>
+
+                  <div class="condition-editor" aria-label="匹配条件">
+                    <div class="condition-editor-header">
+                      <span>条件组</span>
+                      <div class="inline-actions">
+                        <button id="addRuleConditionButton" class="compact-button" type="button">添加条件</button>
+                        <button id="addRuleGroupButton" class="compact-button" type="button">添加条件组</button>
+                      </div>
+                    </div>
+                    <div id="groupRuleConditionList" class="condition-list"></div>
+                    <p class="helper-text">条件组可选择满足全部或满足任一；条件值没有默认值，必须填写后才会参与匹配。</p>
+                  </div>
+
+                  <div class="inline-actions">
+                    <button id="saveGroupRuleButton" class="primary-action" type="submit">保存规则</button>
+                    <button id="cancelGroupRuleButton" type="button">取消</button>
+                  </div>
+                  <p id="groupRuleFormStatus" class="helper-text rule-form-status" role="status"></p>
+                </form>
+
+                <div id="groupRuleList" class="group-rule-list"></div>
+              </section>
+            </section>
+          </section>
+
+          <section class="management-summary-item">
+            <button id="managementPrioritySummary" class="management-summary-button" type="button" data-management-panel-button="priority" aria-expanded="false" aria-controls="managementPriorityPanel">
+              <span class="management-summary-main">
+                <strong>优先分组</strong>
+                <span id="managementPrioritySummaryText">当前窗口分组排序</span>
+              </span>
+              <span class="management-summary-action">调整</span>
+            </button>
+            <section id="managementPriorityPanel" class="management-panel is-hidden" data-management-panel="priority" aria-label="优先分组" hidden>
+              <section class="list-section">
+                <div class="section-title">
+                  <h2>优先分组</h2>
+                </div>
+                <div id="groupList" class="group-list"></div>
+              </section>
+            </section>
+          </section>
+
+          <section class="management-summary-item">
+            <button id="managementWorkspaceSummary" class="management-summary-button" type="button" data-management-panel-button="workspace" aria-expanded="false" aria-controls="managementWorkspacePanel">
+              <span class="management-summary-main">
+                <strong>工作集</strong>
+                <span id="managementWorkspaceSummaryText">查看已保存工作集</span>
+              </span>
+              <span class="management-summary-action">查看</span>
+            </button>
+            <section id="managementWorkspacePanel" class="management-panel is-hidden" data-management-panel="workspace" aria-label="工作集" hidden>
+              <section class="list-section">
+                <div class="section-title">
+                  <h2>工作集</h2>
+                </div>
+                <div id="sessionList" class="session-list"></div>
+              </section>
+            </section>
+          </section>
+
+          <section class="management-summary-item">
+            <button id="managementCleanupSummary" class="management-summary-button" type="button" data-management-panel-button="cleanup" aria-expanded="false" aria-controls="managementCleanupPanel">
+              <span class="management-summary-main">
+                <strong>后续清理</strong>
+                <span id="managementCleanupSummaryText">暂无待处理清理</span>
+              </span>
+              <span class="management-summary-action">处理</span>
+            </button>
+            <section id="managementCleanupPanel" class="management-panel is-hidden" data-management-panel="cleanup" aria-label="后续清理" hidden>
+              <div id="savedCleanupAction" class="saved-cleanup-action"></div>
+            </section>
+          </section>
+        </div>
       </section>
 
       <p id="statusText" class="status-text" role="status"></p>

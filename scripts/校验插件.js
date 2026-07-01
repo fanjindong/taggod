@@ -52,6 +52,8 @@ const popupHtmlPath = path.join(rootDir, 'popup.html');
 const popupStructureHtmlContent = fs.readFileSync(popupHtmlPath, 'utf8');
 const popupCssPath = path.join(rootDir, 'popup.css');
 const popupStructureCssContent = fs.readFileSync(popupCssPath, 'utf8');
+const popupJsPath = path.join(rootDir, 'popup.js');
+const popupStructureJsContent = fs.readFileSync(popupJsPath, 'utf8');
 const readmePath = path.join(rootDir, 'README.md');
 const readmeStructureContent = fs.readFileSync(readmePath, 'utf8');
 
@@ -64,6 +66,17 @@ assert.ok(popupStructureHtmlContent.includes('id="sortHelpText"'));
 assert.ok(popupStructureHtmlContent.includes('aria-label="高级管理"'));
 assert.ok(popupStructureHtmlContent.includes('>高级管理</button>'));
 assert.ok(!popupStructureHtmlContent.includes('<h2>管理操作</h2>'));
+assert.ok(popupStructureHtmlContent.includes('class="management-overview"'));
+assert.ok(popupStructureHtmlContent.includes('id="managementRulesSummary"'));
+assert.ok(popupStructureHtmlContent.includes('id="managementPrioritySummary"'));
+assert.ok(popupStructureHtmlContent.includes('id="managementWorkspaceSummary"'));
+assert.ok(popupStructureHtmlContent.includes('id="managementCleanupSummary"'));
+assert.ok(popupStructureHtmlContent.includes('id="managementRulesPanel"'));
+assert.ok(popupStructureHtmlContent.includes('id="managementPriorityPanel"'));
+assert.ok(popupStructureHtmlContent.includes('id="managementWorkspacePanel"'));
+assert.ok(popupStructureHtmlContent.includes('id="managementCleanupPanel"'));
+assert.strictEqual((popupStructureHtmlContent.match(/data-management-panel-button="/g) || []).length, 4);
+assert.strictEqual((popupStructureHtmlContent.match(/data-management-panel="/g) || []).length, 4);
 assert.strictEqual((popupStructureHtmlContent.match(/id="scanDuplicatesButton"/g) || []).length, 1);
 assert.strictEqual((popupStructureHtmlContent.match(/id="saveWorkspaceButton"/g) || []).length, 1);
 // 重复清理是当前窗口即时操作，应在首屏常用操作区内确认，避免把用户带到高级管理。
@@ -76,7 +89,11 @@ assert.ok(popupStructureHtmlContent.includes('tabindex="-1"'));
 assert.ok(popupStructureCssContent.includes('.main-organize-action'));
 assert.ok(popupStructureCssContent.includes('.secondary-action-grid'));
 assert.ok(popupStructureCssContent.includes('.management-toggle-button'));
+assert.ok(popupStructureCssContent.includes('.management-summary-button'));
+assert.ok(popupStructureCssContent.includes('.management-panel'));
 assert.ok(popupStructureCssContent.includes('.quick-result-item'));
+assert.ok(popupStructureJsContent.includes('activeManagementPanel'));
+assert.ok(popupStructureJsContent.includes('renderManagementOverview'));
 // 首屏常用操作必须避免空状态文本占位，否则整理按钮和辅助操作之间会出现无意义留白。
 assert.ok(popupStructureCssContent.includes('.action-status-text:empty'));
 // 弹窗主体不能拉伸自动网格行，否则可用高度增加时会把各模块之间的间距放大。

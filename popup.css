@@ -1260,6 +1260,78 @@ button:disabled {
   border-top-color: #e2e8f0;
 }
 
+.management-overview {
+  display: grid;
+  gap: 8px;
+}
+
+.management-summary-item {
+  display: grid;
+  gap: 6px;
+}
+
+.management-summary-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 54px;
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.management-summary-button.is-active {
+  border-color: rgba(37, 99, 235, 0.38);
+  background: #eff6ff;
+}
+
+.management-summary-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.management-summary-main strong,
+.management-summary-main span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.management-summary-main strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.management-summary-main span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.management-summary-action {
+  flex-shrink: 0;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.management-panel {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.management-panel .settings-strip {
+  margin-top: 0;
+}
+
 .management-section-label {
   display: flex;
   align-items: center;

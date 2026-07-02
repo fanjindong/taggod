@@ -1202,6 +1202,63 @@ const visibleSearchTabs = popupSandbox.getVisibleTabsFromState({
   ]
 });
 assert.deepStrictEqual(Array.from(visibleSearchTabs, (tab) => tab.id), [2]);
+const searchEnhancementTabs = [
+  {
+    id: 11,
+    title: 'GitHub Pull Requests',
+    url: 'https://github.com/acme/tabgod/pulls',
+    groupKey: 'github.com',
+    groupTitle: '研发协作',
+    shortGroupTitle: 'github',
+    isCurrentWindow: true,
+    active: false,
+    index: 0,
+    lastAccessedAt: 1000
+  },
+  {
+    id: 12,
+    title: 'Issue 详情',
+    url: 'https://github.com/acme/tabgod/issues/12',
+    groupKey: 'github.com',
+    groupTitle: '研发协作',
+    shortGroupTitle: 'github',
+    isCurrentWindow: true,
+    active: false,
+    index: 1,
+    lastAccessedAt: 900
+  },
+  {
+    id: 13,
+    title: 'GitLab 合并请求',
+    url: 'https://gitlab.example.com/acme/tabgod/-/merge_requests',
+    groupKey: 'gitlab.example.com',
+    groupTitle: '代码平台',
+    shortGroupTitle: 'gitlab',
+    isCurrentWindow: true,
+    active: false,
+    index: 2,
+    lastAccessedAt: 800
+  }
+];
+const multiKeywordResults = popupSandbox.getVisibleTabsFromState({
+  query: 'github issue',
+  tabs: searchEnhancementTabs,
+  recentlyClosedTabs: []
+});
+assert.deepStrictEqual(Array.from(multiKeywordResults, (tab) => tab.id), [12]);
+assert.ok(
+  popupSandbox.getSearchMatchScore(searchEnhancementTabs[0], 'gpr') > 0,
+  '标题首字母缩写应能命中 GitHub Pull Requests'
+);
+assert.ok(
+  popupSandbox.getSearchMatchScore(searchEnhancementTabs[0], 'gh pr') > 0,
+  '站点缩写和标题关键词组合应能命中 GitHub Pull Requests'
+);
+assert.ok(
+  popupSandbox.getSearchMatchScore(searchEnhancementTabs[2], 'gh pr')
+    < popupSandbox.getSearchMatchScore(searchEnhancementTabs[0], 'gh pr'),
+  '缩写匹配不能压过更明确的站点和标题组合命中'
+);
 const visibleRecentTabs = popupSandbox.getVisibleTabsFromState({
   query: '',
   tabs: [

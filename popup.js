@@ -541,7 +541,7 @@ function getSortHelpText(query = state.query) {
     return '最近使用按页面最近激活时间排序，当前窗口正在看的页面不会占用列表位置。';
   }
 
-  return '搜索排序按综合分计算：标题完全匹配 +400，标题包含 +300，分组名或主域名包含 +220，网址包含 +100；最近 1 分钟 +260，10 分钟内 +180，1 小时内 +100。同分时已打开标签优先，再按最近使用或关闭时间排序。';
+  return '搜索排序按综合分计算：标题完全匹配 +400，标题包含 +300，分组名或主域名包含 +220，网址包含 +100；多关键词需要全部命中，缩写和非连续字符作为低分兜底；最近 1 分钟 +260，10 分钟内 +180，1 小时内 +100。同分时已打开标签优先，再按最近使用或关闭时间排序。';
 }
 
 function renderSortHelp() {
@@ -1679,6 +1679,43 @@ function normalizeSearchText(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+function getSearchTokens(value) {
+  return normalizeSearchText(value).split(/\s+/).filter(Boolean);
+}
+
+function getSearchWords(value) {
+  return normalizeSearchText(value).match(/[a-z0-9\u4e00-\u9fa5]+/g) || [];
+}
+
+function buildAcronymText(value) {
+  return getSearchWords(value).map((word) => word[0]).join('');
+}
+
+function isAsciiToken(value) {
+  return /^[a-z0-9]+$/.test(value);
+}
+
+function isSubsequenceMatch(source, query) {
+  if (!isAsciiToken(query) || query.length < 2) {
+    return false;
+  }
+
+  let queryIndex = 0;
+  const compactSource = normalizeSearchText(source).replace(/[^a-z0-9]/g, '');
+
+  for (const char of compactSource) {
+    if (char === query[queryIndex]) {
+      queryIndex += 1;
+    }
+
+    if (queryIndex === query.length) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function getTabSearchText(tab) {
   return [
     tab.title,
@@ -1689,6 +1726,80 @@ function getTabSearchText(tab) {
   ].map(normalizeSearchText).join(' ');
 }
 
+function getSearchFieldParts(tab) {
+  return {
+    title: normalizeSearchText(tab.title),
+    groupTexts: [
+      tab.groupTitle,
+      tab.groupKey,
+      tab.shortGroupTitle
+    ].map(normalizeSearchText),
+    url: normalizeSearchText(tab.url),
+    acronymText: [
+      tab.title,
+      tab.groupTitle,
+      tab.groupKey,
+      tab.shortGroupTitle,
+      tab.url
+    ].map(buildAcronymText).join(' ')
+  };
+}
+
+function getTokenMatchScore(parts, token) {
+  if (!token) {
+    return 0;
+  }
+
+  if (parts.title.includes(token)) {
+    return 180;
+  }
+
+  if (parts.groupTexts.some((text) => text.includes(token))) {
+    return 140;
+  }
+
+  if (parts.url.includes(token)) {
+    return 80;
+  }
+
+  if (parts.acronymText.split(/\s+/).some((acronym) => acronym.includes(token))) {
+    return 120;
+  }
+
+  if (isSubsequenceMatch(parts.title, token) || parts.groupTexts.some((text) => isSubsequenceMatch(text, token))) {
+    // 弱匹配只用于少打字的兜底，分数刻意低于网址包含，避免短缩写压过明确命中。
+    return 60;
+  }
+
+  if (isSubsequenceMatch(parts.url, token)) {
+    return 40;
+  }
+
+  return 0;
+}
+
+function getTokenizedSearchMatchScore(tab, tokens) {
+  if (tokens.length <= 1) {
+    return 0;
+  }
+
+  const parts = getSearchFieldParts(tab);
+  let totalScore = 0;
+
+  for (const token of tokens) {
+    const tokenScore = getTokenMatchScore(parts, token);
+
+    if (tokenScore <= 0) {
+      return 0;
+    }
+
+    totalScore += tokenScore;
+  }
+
+  // 多关键词匹配比完整标题包含更弱，但应高于单纯网址包含，方便“github issue”这类真实输入。
+  return Math.min(totalScore, 260);
+}
+
 function getSearchMatchScore(tab, query) {
   const normalizedQuery = normalizeSearchText(query);
 
@@ -1696,28 +1807,32 @@ function getSearchMatchScore(tab, query) {
     return 0;
   }
 
-  const title = normalizeSearchText(tab.title);
-  const groupKey = normalizeSearchText(tab.groupKey);
-  const groupTitle = normalizeSearchText(tab.groupTitle);
-  const url = normalizeSearchText(tab.url);
+  const tokens = getSearchTokens(normalizedQuery);
+  const parts = getSearchFieldParts(tab);
 
-  if (title === normalizedQuery) {
+  if (parts.title === normalizedQuery) {
     return 400;
   }
 
-  if (title.includes(normalizedQuery)) {
+  if (parts.title.includes(normalizedQuery)) {
     return 300;
   }
 
-  if (groupTitle.includes(normalizedQuery) || groupKey.includes(normalizedQuery)) {
+  if (parts.groupTexts.some((text) => text.includes(normalizedQuery))) {
     return 220;
   }
 
-  if (url.includes(normalizedQuery)) {
+  if (parts.url.includes(normalizedQuery)) {
     return 100;
   }
 
-  return 0;
+  const tokenizedScore = getTokenizedSearchMatchScore(tab, tokens);
+
+  if (tokenizedScore > 0) {
+    return tokenizedScore;
+  }
+
+  return tokens.length === 1 ? getTokenMatchScore(parts, tokens[0]) : 0;
 }
 
 function getRecentMatchScore(tab, now = Date.now()) {

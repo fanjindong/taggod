@@ -147,6 +147,7 @@ assert.ok(!popupStructureCssContent.includes('box-shadow 160ms'));
 assert.ok(!popupStructureCssContent.includes('transform: translateY(1px)'));
 assert.ok(!popupStructureCssContent.includes('box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03)'));
 assert.ok(popupStructureCssContent.includes('.duplicate-review-panel'));
+assert.ok(popupStructureCssContent.includes('scroll-margin-top: 10px;'));
 assert.ok(readmeStructureContent.includes('“高级管理”里新增自定义分组规则'));
 assert.ok(readmeStructureContent.includes('搜索框会自动聚焦'));
 assert.ok(readmeStructureContent.includes('最近关闭的标签页'));
@@ -1343,6 +1344,10 @@ const popupJsContent = fs.readFileSync(popupPath, 'utf8');
 assert.ok(!popupJsContent.includes('请在高级管理中确认'));
 assert.ok(popupJsContent.includes('function focusDuplicateReviewPanel()'));
 assert.ok(popupJsContent.includes('focusDuplicateReviewPanel();'));
+assert.ok(popupJsContent.includes('keepDuplicateReviewFocus'));
+assert.ok(popupJsContent.includes('await loadState({ keepStatus: true, keepDuplicateReviewFocus: true });'));
+assert.ok(popupJsContent.includes('const DUPLICATE_REVIEW_SCROLL_OPTIONS = { block: \'start\', inline: \'nearest\' };'));
+assert.ok(popupJsContent.includes('section.scrollIntoView(DUPLICATE_REVIEW_SCROLL_OPTIONS);'));
 assert.ok(popupJsContent.includes('move-priority-group'));
 assert.ok(popupJsContent.includes('group-order-button'));
 

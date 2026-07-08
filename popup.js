@@ -47,6 +47,7 @@ const state = {
 const DEFAULT_RECENT_RESULT_LIMIT = 30;
 // 搜索结果最多渲染 100 条，原因是弹窗空间有限，过多 DOM 会影响键盘选择响应。
 const SEARCH_RESULT_LIMIT = 100;
+const DUPLICATE_REVIEW_SCROLL_OPTIONS = { block: 'start', inline: 'nearest' };
 const POPUP_STORAGE_KEYS = {
   settings: 'tabgod.settings',
   recentAccess: 'tabgod.recentAccess'
@@ -210,6 +211,9 @@ async function loadState(options = {}) {
 
     if (options.keepMoreToolsFocus) {
       focusMoreTools();
+    } else if (options.keepDuplicateReviewFocus) {
+      // 批量关闭后仍停留在确认结果上下文，避免刷新状态时把焦点带回搜索框。
+      focusDuplicateReviewPanel();
     } else {
       focusSearchInput();
     }
@@ -460,7 +464,7 @@ async function closeSelectedDuplicates() {
     state.duplicateReview.resultMessage = resultMessage;
     setStatus(resultMessage);
     setActionStatus(resultMessage, { success: failedCount === 0, error: failedCount > 0 });
-    await loadState({ keepStatus: true });
+    await loadState({ keepStatus: true, keepDuplicateReviewFocus: true });
   } catch (error) {
     setStatus(error.message || '关闭重复标签失败');
     setActionStatus(error.message || '关闭重复标签失败', { error: true });
@@ -796,8 +800,8 @@ function focusDuplicateReviewPanel() {
   }
 
   if (typeof section.scrollIntoView === 'function') {
-    // 顶部重复提示和确认面板之间可能隔着搜索结果，滚入视野能让用户立即看到下一步。
-    section.scrollIntoView({ block: 'nearest' });
+    // 重复清理是用户下一步主任务，顶部对齐能避免确认信息落在弹窗下半部分。
+    section.scrollIntoView(DUPLICATE_REVIEW_SCROLL_OPTIONS);
   }
 
   if (typeof section.focus === 'function') {

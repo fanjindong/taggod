@@ -830,6 +830,7 @@ kbd {
 .duplicate-review-panel {
   /* 重复清理属于当前窗口即时确认，不放进高级管理，使用轻边框和浅底色提示这是临时操作面板。 */
   margin-top: 0;
+  scroll-margin-top: 10px;
   padding: 10px;
   border: 1px solid rgba(217, 119, 6, 0.24);
   border-radius: 8px;

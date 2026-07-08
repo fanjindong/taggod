@@ -469,11 +469,40 @@ kbd {
 }
 
 .quick-result-item {
+  display: grid;
   width: 100%;
-  min-height: 54px;
+  min-height: 58px;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  align-items: center;
+  column-gap: 8px;
+  padding: 8px 8px 8px 12px;
+  text-align: left;
+}
+
+.quick-result-open-button {
+  display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+  column-gap: 8px;
+  min-width: 0;
+  width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
   text-align: left;
+}
+
+.quick-result-open-button:hover {
+  border-color: transparent;
+  background: transparent;
+}
+
+.quick-result-action-slot {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
 }
 
 .quick-result-item.is-selected {
@@ -1102,9 +1131,66 @@ kbd {
 }
 
 .quick-result-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  align-items: center;
+  column-gap: 8px;
   min-height: 58px;
-  padding: 10px 12px;
+  padding: 8px 8px 8px 12px;
   transition: border-color 80ms ease, background-color 80ms ease;
+}
+
+.quick-result-open-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  min-width: 0;
+  width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.quick-result-open-button:hover {
+  border-color: transparent;
+  background: transparent;
+}
+
+.quick-result-action-slot {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+}
+
+.quick-result-close-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-color: transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+  opacity: 0.3;
+  transition: opacity 100ms ease, background-color 100ms ease, border-color 100ms ease, color 100ms ease;
+}
+
+.quick-result-item:hover .quick-result-close-button,
+.quick-result-item:focus-within .quick-result-close-button,
+.quick-result-item.is-selected .quick-result-close-button {
+  opacity: 1;
+}
+
+.quick-result-close-button:hover,
+.quick-result-close-button:focus-visible {
+  border-color: rgba(220, 38, 38, 0.24);
+  background: rgba(254, 226, 226, 0.72);
+  color: #b91c1c;
 }
 
 .quick-result-item:hover {

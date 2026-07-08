@@ -1016,8 +1016,9 @@ function buildOverview(tabs) {
 }
 
 async function getDuplicateOverview() {
-  const allTabs = await queryAllWindowTabs();
-  const duplicateCount = buildDuplicateGroups(allTabs).reduce((total, group) => {
+  // 顶部重复提示会直接引导用户点“智能去重”，必须和去重扫描保持当前窗口口径。
+  const tabs = await queryCurrentWindowTabs();
+  const duplicateCount = buildDuplicateGroups(tabs).reduce((total, group) => {
     return total + group.closeCount;
   }, 0);
 
@@ -1378,6 +1379,66 @@ async function closeSavedTabs(tabIds) {
   return {
     closedCount,
     failedCount: safeTabIds.length - closedCount
+  };
+}
+
+async function getLastFocusedWindowForCloseGuard() {
+  if (!chrome.windows || typeof chrome.windows.getLastFocused !== 'function') {
+    return null;
+  }
+
+  try {
+    return await chrome.windows.getLastFocused();
+  } catch (error) {
+    // 读取失败时先返回空值，由关闭逻辑统一拒绝，避免无法确认当前活动页时误关用户正在看的标签。
+    return null;
+  }
+}
+
+function isFocusedActiveTab(tab, focusedWindow) {
+  return Boolean(
+    tab
+    && tab.active
+    && focusedWindow
+    && typeof focusedWindow.id === 'number'
+    && tab.windowId === focusedWindow.id
+  );
+}
+
+async function closeSearchResultTab(tabId) {
+  if (!Number.isInteger(tabId)) {
+    throw new Error('目标标签无效');
+  }
+
+  let tab;
+
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch (error) {
+    throw new Error('关闭失败，标签可能已经不存在');
+  }
+
+  const focusedWindow = await getLastFocusedWindowForCloseGuard();
+
+  if (!focusedWindow || typeof focusedWindow.id !== 'number') {
+    // 无法确认当前活动页时必须拒绝关闭，因为活动标签可能就是用户正在操作的页面。
+    throw new Error('该标签受保护，未关闭');
+  }
+
+  if (tab.pinned || tab.audible || isFocusedActiveTab(tab, focusedWindow)) {
+    throw new Error('该标签受保护，未关闭');
+  }
+
+  try {
+    await chrome.tabs.remove(tabId);
+  } catch (error) {
+    throw new Error('关闭失败，请稍后重试');
+  }
+
+  return {
+    closedTabId: tabId,
+    title: tab.title || '',
+    url: getTabUrl(tab)
   };
 }
 
@@ -1964,6 +2025,10 @@ async function handleMessage(message) {
 
   if (action === 'close-selected-duplicates') {
     return closeSelectedDuplicateTabs(message.tabIds);
+  }
+
+  if (action === 'close-search-result-tab') {
+    return closeSearchResultTab(message.tabId);
   }
 
   if (action === 'save-workspace') {

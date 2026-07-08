@@ -61,6 +61,7 @@ assert.ok(popupStructureHtmlContent.includes('class="primary-action main-organiz
 assert.ok(popupStructureHtmlContent.includes('class="secondary-action-grid"'));
 assert.ok(popupStructureHtmlContent.includes('搜索标签页'));
 assert.ok(popupStructureHtmlContent.includes('id="searchResultList"'));
+assert.ok(popupStructureHtmlContent.includes('id="searchResultList" class="tab-list quick-result-list" tabindex="-1"'));
 assert.ok(popupStructureHtmlContent.includes('id="sortHelpButton"'));
 assert.ok(popupStructureHtmlContent.includes('id="sortHelpText"'));
 assert.ok(popupStructureHtmlContent.includes('aria-label="高级管理"'));
@@ -92,6 +93,46 @@ assert.ok(popupStructureCssContent.includes('.management-toggle-button'));
 assert.ok(popupStructureCssContent.includes('.management-summary-button'));
 assert.ok(popupStructureCssContent.includes('.management-panel'));
 assert.ok(popupStructureCssContent.includes('.quick-result-item'));
+assert.ok(popupStructureJsContent.includes('quick-result-open-button'));
+assert.ok(popupStructureJsContent.includes('quick-result-action-slot'));
+assert.ok(popupStructureJsContent.includes("document.createElement('article')"));
+assert.ok(!popupStructureJsContent.includes("const item = document.createElement('button');\n    item.className = `tab-item quick-result-item"));
+assert.ok(popupStructureCssContent.includes('.quick-result-open-button'));
+assert.ok(popupStructureCssContent.includes('.quick-result-action-slot'));
+assert.ok(popupStructureCssContent.includes('grid-template-columns: minmax(0, 1fr) 40px;'));
+assert.ok(popupStructureJsContent.includes('function canCloseSearchResultTab'));
+assert.ok(popupStructureJsContent.includes('function getSearchResultDisplayName'));
+assert.ok(popupStructureJsContent.includes('async function closeSearchResultTab'));
+assert.ok(popupStructureJsContent.includes('function focusSelectedSearchResult'));
+assert.ok(popupStructureJsContent.includes('function getSearchResultIndexFromElement'));
+assert.ok(popupStructureJsContent.includes('function syncSelectedIndexFromSearchResultFocus'));
+assert.ok(popupStructureJsContent.includes('function syncSelectedIndexFromSearchResultElement'));
+assert.ok(popupStructureJsContent.includes('function clampSelectedIndexAfterClose'));
+assert.ok(popupStructureJsContent.includes("closest('.quick-result-item')"));
+assert.ok(popupStructureJsContent.includes('state.selectedIndex = clampSelectedIndex(focusedIndex, visibleTabs.length);'));
+assert.ok(popupStructureJsContent.includes('state.selectedIndex = clampSelectedIndexAfterClose(state.selectedIndex, getVisibleTabsFromState(state).length);'));
+assert.ok(popupStructureJsContent.includes('return total - 1;'));
+assert.ok(popupStructureJsContent.includes('function handleSearchResultNavigationKeydown'));
+assert.ok(popupStructureJsContent.includes('function handleSearchResultListKeydown'));
+assert.ok(popupStructureJsContent.includes("document.getElementById('searchResultList').addEventListener('keydown', handleSearchResultListKeydown)"));
+assert.ok(!popupStructureJsContent.includes("openButton.addEventListener('keydown', handleSearchResultListKeydown)"));
+assert.ok(popupStructureJsContent.includes('handleSearchResultNavigationKeydown(event)'));
+assert.ok(popupStructureJsContent.includes('restoreFocusAfterRender'));
+assert.ok(popupStructureJsContent.includes('handleSearchResultNavigationKeydown(event, { restoreFocusAfterRender: true })'));
+assert.ok(popupStructureJsContent.includes('focusSelectedSearchResult();'));
+assert.ok(popupStructureJsContent.includes("if (event.key === 'Enter')"));
+assert.ok(popupStructureJsContent.includes("syncSelectedIndexFromSearchResultElement(closeButton);"));
+assert.ok(popupStructureJsContent.includes('syncSelectedIndexFromSearchResultElement(event && (event.currentTarget || event.target));'));
+assert.ok(popupStructureJsContent.includes("sendMessage('close-search-result-tab'"));
+assert.ok(popupStructureJsContent.includes('tab.isCurrentWindow && tab.active'));
+assert.ok(popupStructureJsContent.includes('audible: Boolean(tab.audible)'));
+assert.ok(popupStructureJsContent.includes('event.stopPropagation()'));
+assert.ok(popupStructureJsContent.includes('quick-result-close-button'));
+assert.ok(popupStructureJsContent.includes('item.appendChild(openButton)'));
+assert.ok(popupStructureJsContent.includes('item.appendChild(closeButton)'));
+assert.ok(!popupStructureJsContent.includes('actionSlot.appendChild(closeButton)'));
+assert.ok(popupStructureCssContent.includes('.quick-result-close-button'));
+assert.ok(popupStructureCssContent.includes('.quick-result-close-button:focus-visible'));
 assert.ok(popupStructureJsContent.includes('activeManagementPanel'));
 assert.ok(popupStructureJsContent.includes('renderManagementOverview'));
 // 首屏常用操作必须避免空状态文本占位，否则整理按钮和辅助操作之间会出现无意义留白。
@@ -110,6 +151,8 @@ assert.ok(readmeStructureContent.includes('“高级管理”里新增自定义�
 assert.ok(readmeStructureContent.includes('搜索框会自动聚焦'));
 assert.ok(readmeStructureContent.includes('最近关闭的标签页'));
 assert.ok(readmeStructureContent.includes('`sessions`'));
+assert.ok(readmeStructureContent.includes('搜索结果里的普通标签页可以直接关闭'));
+assert.ok(readmeStructureContent.includes('固定标签、当前正在看的标签和正在播放声音的标签不会显示关闭入口'));
 assert.ok(!readmeStructureContent.includes('“更多工具”里新增自定义分组规则'));
 
 for (const scriptFile of ['background.js', 'popup.js']) {
@@ -1371,6 +1414,113 @@ assert.ok(usageSvgContent.includes('分组规则是核心能力'));
 assert.ok(usageSvgContent.includes('满足全部或满足任一'));
 
 async function runAsyncChecks() {
+  backgroundSandbox.queryCurrentWindowTabs = async () => [
+    { id: 201, title: '当前窗口页面', url: 'https://current.example.com/a', active: true, pinned: false, index: 0 }
+  ];
+  backgroundSandbox.queryAllWindowTabs = async () => [
+    { id: 201, title: '当前窗口页面', url: 'https://current.example.com/a', active: true, pinned: false, index: 0 },
+    { id: 202, title: '其他窗口副本一', url: 'https://other.example.com/dup', active: false, pinned: false, index: 0 },
+    { id: 203, title: '其他窗口副本二', url: 'https://other.example.com/dup', active: false, pinned: false, index: 1 }
+  ];
+  assert.strictEqual(
+    (await backgroundSandbox.getDuplicateOverview()).duplicateCount,
+    0
+  );
+
+  backgroundSandbox.queryCurrentWindowTabs = async () => [
+    { id: 204, title: '当前窗口副本一', url: 'https://current.example.com/dup', active: true, pinned: false, index: 0 },
+    { id: 205, title: '当前窗口副本二', url: 'https://current.example.com/dup', active: false, pinned: false, index: 1 }
+  ];
+  backgroundSandbox.queryAllWindowTabs = async () => [];
+  assert.strictEqual(
+    (await backgroundSandbox.getDuplicateOverview()).duplicateCount,
+    1
+  );
+
+  const closeSearchResultRemovedIds = [];
+  const closeSearchResultTabs = new Map([
+    [101, { id: 101, title: '普通页面', url: 'https://example.com/a', windowId: 1, active: false, pinned: false, audible: false }],
+    [102, { id: 102, title: '固定页面', url: 'https://example.com/pinned', windowId: 1, active: false, pinned: true, audible: false }],
+    [103, { id: 103, title: '当前页面', url: 'https://example.com/current', windowId: 1, active: true, pinned: false, audible: false }],
+    [104, { id: 104, title: '播放页面', url: 'https://example.com/audio', windowId: 1, active: false, pinned: false, audible: true }],
+    [105, { id: 105, title: '其他窗口活动页', url: 'https://example.com/other-window', windowId: 2, active: true, pinned: false, audible: false }],
+    [106, { id: 106, title: '消息入口页面', url: 'https://example.com/message', windowId: 1, active: false, pinned: false, audible: false }]
+  ]);
+
+  backgroundSandbox.chrome.windows = {
+    getLastFocused: async () => ({ id: 1 })
+  };
+  backgroundSandbox.chrome.tabs.get = async (tabId) => {
+    if (!closeSearchResultTabs.has(tabId)) {
+      throw new Error('不存在');
+    }
+
+    return closeSearchResultTabs.get(tabId);
+  };
+  backgroundSandbox.chrome.tabs.remove = async (tabId) => {
+    closeSearchResultRemovedIds.push(tabId);
+    closeSearchResultTabs.delete(tabId);
+  };
+
+  const closeSearchResult = await backgroundSandbox.closeSearchResultTab(101);
+  assert.deepStrictEqual({ ...closeSearchResult }, {
+    closedTabId: 101,
+    title: '普通页面',
+    url: 'https://example.com/a'
+  });
+  assert.deepStrictEqual(closeSearchResultRemovedIds, [101]);
+
+  await assert.rejects(
+    () => backgroundSandbox.closeSearchResultTab('101'),
+    /目标标签无效/
+  );
+  await assert.rejects(
+    () => backgroundSandbox.closeSearchResultTab(999),
+    /关闭失败，标签可能已经不存在/
+  );
+  await assert.rejects(
+    () => backgroundSandbox.closeSearchResultTab(102),
+    /该标签受保护，未关闭/
+  );
+  await assert.rejects(
+    () => backgroundSandbox.closeSearchResultTab(103),
+    /该标签受保护，未关闭/
+  );
+  await assert.rejects(
+    () => backgroundSandbox.closeSearchResultTab(104),
+    /该标签受保护，未关闭/
+  );
+
+  const otherWindowActiveResult = await backgroundSandbox.closeSearchResultTab(105);
+  assert.deepStrictEqual({ ...otherWindowActiveResult }, {
+    closedTabId: 105,
+    title: '其他窗口活动页',
+    url: 'https://example.com/other-window'
+  });
+  assert.deepStrictEqual(closeSearchResultRemovedIds, [101, 105]);
+
+  const handleCloseResult = await backgroundSandbox.handleMessage({
+    action: 'close-search-result-tab',
+    tabId: 106
+  });
+  assert.strictEqual(handleCloseResult.closedTabId, 106);
+  assert.deepStrictEqual(closeSearchResultRemovedIds, [101, 105, 106]);
+
+  closeSearchResultTabs.set(101, { id: 101, title: '普通页面', url: 'https://example.com/a', windowId: 1, active: false, pinned: false, audible: false });
+
+  const closeSearchResultRemovedCountBeforeReadFailure = closeSearchResultRemovedIds.length;
+  backgroundSandbox.chrome.windows = {
+    getLastFocused: async () => {
+      throw new Error('读取失败');
+    }
+  };
+
+  await assert.rejects(
+    () => backgroundSandbox.closeSearchResultTab(101),
+    /该标签受保护，未关闭/
+  );
+  assert.strictEqual(closeSearchResultRemovedIds.length, closeSearchResultRemovedCountBeforeReadFailure);
+
   await assertPopupDirectStateContract();
 
   let storedSettingsForPriorityMove = {

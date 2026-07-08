@@ -123,6 +123,7 @@ function buildPopupTabSnapshots(tabs, context = {}) {
       favIconUrl: tab.favIconUrl || '',
       active: Boolean(tab.active),
       pinned: Boolean(tab.pinned),
+      audible: Boolean(tab.audible),
       index: Number.isInteger(tab.index) ? tab.index : 0,
       groupKey,
       groupTitle: groupKey,
@@ -351,6 +352,7 @@ function bindEvents() {
     }
   });
   document.getElementById('searchInput').addEventListener('keydown', handleSearchKeydown);
+  document.getElementById('searchResultList').addEventListener('keydown', handleSearchResultListKeydown);
   document.getElementById('sortHelpButton').addEventListener('click', toggleSortHelp);
   document.getElementById('moreToolsButton').addEventListener('click', toggleMoreTools);
   document.querySelectorAll('[data-management-panel-button]').forEach((button) => {
@@ -491,26 +493,60 @@ async function openSearchResult(result) {
   await runAction('activate-tab', { tabId: result.id });
 }
 
-function handleSearchKeydown(event) {
+function canCloseSearchResultTab(tab) {
+  if (!tab) {
+    return false;
+  }
+
+  const resultType = tab && tab.resultType ? tab.resultType : 'open';
+
+  return resultType === 'open'
+    && Number.isInteger(tab.id)
+    && tab.pinned !== true
+    && !(tab.isCurrentWindow && tab.active)
+    && tab.audible !== true;
+}
+
+function getSearchResultDisplayName(tab) {
+  if (tab && tab.title) {
+    return tab.title;
+  }
+
+  if (tab && tab.url) {
+    return tab.url;
+  }
+
+  return '未命名标签页';
+}
+
+function handleSearchResultNavigationKeydown(event, options = {}) {
   const visibleTabs = getVisibleTabs();
 
   if (event.key === 'ArrowDown') {
     event.preventDefault();
     state.selectedIndex = clampSelectedIndex(state.selectedIndex + 1, visibleTabs.length);
     renderTabs();
-    return;
+    if (options.restoreFocusAfterRender) {
+      // 列表内按钮触发方向键时会重建当前聚焦节点，需要把焦点补回新选中项。
+      focusSelectedSearchResult();
+    }
+    return true;
   }
 
   if (event.key === 'ArrowUp') {
     event.preventDefault();
     state.selectedIndex = clampSelectedIndex(state.selectedIndex - 1, visibleTabs.length);
     renderTabs();
-    return;
+    if (options.restoreFocusAfterRender) {
+      // 搜索框方向键仍保留原焦点，只在结果列表上下文里恢复焦点。
+      focusSelectedSearchResult();
+    }
+    return true;
   }
 
   if (event.key === 'Enter') {
     event.preventDefault();
-    const selectedTab = visibleTabs[clampSelectedIndex(state.selectedIndex, visibleTabs.length)];
+    const selectedTab = getSearchResultTabFromNavigationEvent(event, visibleTabs);
 
     if (!selectedTab) {
       setStatus('没有可切换的标签页');
@@ -518,6 +554,108 @@ function handleSearchKeydown(event) {
     }
 
     openSearchResult(selectedTab);
+    return true;
+  }
+
+  return false;
+}
+
+function handleSearchKeydown(event) {
+  return handleSearchResultNavigationKeydown(event);
+}
+
+function handleSearchResultListKeydown(event) {
+  const closeButton = event.target && typeof event.target.closest === 'function'
+    ? event.target.closest('.quick-result-close-button')
+    : null;
+
+  if (closeButton) {
+    if (event.key === 'Enter') {
+      // 关闭按钮的回车要保留原生点击语义，避免把关闭动作变成列表导航。
+      return;
+    }
+
+    syncSelectedIndexFromSearchResultElement(closeButton);
+  }
+
+  syncSelectedIndexFromSearchResultFocus(event);
+  return handleSearchResultNavigationKeydown(event, { restoreFocusAfterRender: true });
+}
+
+function getSearchResultIndexFromElement(element) {
+  if (!element || typeof element.closest !== 'function') {
+    return -1;
+  }
+
+  const focusedItem = element.closest('.quick-result-item');
+
+  if (!focusedItem || !focusedItem.parentElement) {
+    return -1;
+  }
+
+  // 结果项本身是列表的直接子节点，直接在父节点里计算位置可以避免重复维护索引缓存。
+  return Array.prototype.indexOf.call(focusedItem.parentElement.children, focusedItem);
+}
+
+function syncSelectedIndexFromSearchResultElement(element) {
+  const focusedIndex = getSearchResultIndexFromElement(element);
+
+  if (!Number.isInteger(focusedIndex) || focusedIndex < 0) {
+    return null;
+  }
+
+  const visibleTabs = getVisibleTabs();
+
+  // 焦点可能通过 Tab 直接进入列表里的按钮，这里同步选中项，确保回车打开的始终是当前焦点项。
+  state.selectedIndex = clampSelectedIndex(focusedIndex, visibleTabs.length);
+  return visibleTabs[state.selectedIndex] || null;
+}
+
+function syncSelectedIndexFromSearchResultFocus(event) {
+  if (!event || !event.target) {
+    return null;
+  }
+
+  return syncSelectedIndexFromSearchResultElement(event.target);
+}
+
+function getSearchResultTabFromNavigationEvent(event, visibleTabs) {
+  const focusedTab = syncSelectedIndexFromSearchResultFocus(event);
+
+  if (focusedTab) {
+    return focusedTab;
+  }
+
+  return visibleTabs[clampSelectedIndex(state.selectedIndex, visibleTabs.length)];
+}
+
+async function closeSearchResultTab(tab, event) {
+  if (event && typeof event.stopPropagation === 'function') {
+    event.stopPropagation();
+  }
+
+  syncSelectedIndexFromSearchResultElement(event && (event.currentTarget || event.target));
+
+  if (!canCloseSearchResultTab(tab)) {
+    // 关闭入口只给普通可关闭标签，受保护标签保持在结果列表里，避免焦点被带回搜索框。
+    setStatus('该标签受保护，未关闭');
+    focusSelectedSearchResult();
+    return;
+  }
+
+  try {
+    const result = await sendMessage('close-search-result-tab', { tabId: tab.id });
+    const closedTabId = Number.isInteger(result.closedTabId) ? result.closedTabId : tab.id;
+    const displayName = result.title || getSearchResultDisplayName(tab);
+
+    state.tabs = state.tabs.filter((item) => item.id !== closedTabId);
+    state.selectedIndex = clampSelectedIndexAfterClose(state.selectedIndex, getVisibleTabsFromState(state).length);
+    renderTabs();
+    setStatus(`已关闭：${displayName}`);
+    focusSelectedSearchResult();
+  } catch (error) {
+    setStatus(error && error.message ? error.message : '关闭失败，请稍后重试');
+    focusSelectedSearchResult();
   }
 }
 
@@ -1495,9 +1633,9 @@ function renderTabs() {
   }
 
   visibleTabs.forEach((tab, index) => {
-    const item = document.createElement('button');
+    // 结果项外层改成 article，原因是右侧要预留独立操作槽，避免后续按钮语义挤在同一个根节点里。
+    const item = document.createElement('article');
     item.className = `tab-item quick-result-item${index === selectedIndex ? ' is-selected' : ''}`;
-    item.type = 'button';
     item.dataset.action = tab.resultType === 'recentlyClosed' ? 'restore' : 'activate';
     item.dataset.tabId = String(tab.id);
     const groupTitle = tab.groupTitle || tab.groupKey;
@@ -1505,14 +1643,33 @@ function renderTabs() {
     const windowLabel = isRecentlyClosed ? '最近关闭' : (tab.windowLabel || (tab.isCurrentWindow ? '当前窗口' : '其他窗口'));
     const accessLabel = formatRecentAccessTime(Number(tab.lastAccessedAt) || 0);
     const metaText = accessLabel ? `${windowLabel} · ${accessLabel}` : windowLabel;
-    item.innerHTML = `
+    const openButton = document.createElement('button');
+    openButton.className = 'quick-result-open-button';
+    openButton.type = 'button';
+    openButton.innerHTML = `
       <span class="quick-result-main">
         <span class="tab-title" title="${escapeHtml(tab.title)}">${escapeHtml(tab.title)}</span>
         <span class="tab-url" title="${escapeHtml(tab.groupKey)} · ${escapeHtml(tab.url)}">${escapeHtml(groupTitle)} · ${escapeHtml(tab.url)}</span>
       </span>
       <span class="quick-result-meta">${escapeHtml(metaText)}</span>
     `;
-    item.addEventListener('click', () => openSearchResult(tab));
+    openButton.addEventListener('click', () => openSearchResult(tab));
+
+    item.appendChild(openButton);
+
+    if (canCloseSearchResultTab(tab)) {
+      const closeButton = document.createElement('button');
+      const displayName = getSearchResultDisplayName(tab);
+
+      // 关闭按钮直接作为结果项的第二个网格子项，避免中间包裹层破坏打开和关闭按钮的兄弟关系。
+      closeButton.className = 'quick-result-action-slot quick-result-close-button';
+      closeButton.type = 'button';
+      closeButton.textContent = '×';
+      closeButton.title = '关闭标签';
+      closeButton.setAttribute('aria-label', `关闭标签：${displayName}`);
+      closeButton.addEventListener('click', (event) => closeSearchResultTab(tab, event));
+      item.appendChild(closeButton);
+    }
     tabList.appendChild(item);
   });
 
@@ -1525,6 +1682,24 @@ function keepSelectedResultVisible(tabList) {
   if (selectedItem && typeof selectedItem.scrollIntoView === 'function') {
     // 键盘上下选择时列表本身不会自动滚动，这里只把高亮项滚进可视区域。
     selectedItem.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function focusSelectedSearchResult() {
+  const tabList = document.getElementById('searchResultList');
+  if (!tabList) {
+    return;
+  }
+
+  const selectedOpenButton = tabList.querySelector('.quick-result-item.is-selected .quick-result-open-button');
+
+  if (selectedOpenButton && typeof selectedOpenButton.focus === 'function') {
+    selectedOpenButton.focus({ preventScroll: true });
+    return;
+  }
+
+  if (tabList && typeof tabList.focus === 'function') {
+    tabList.focus({ preventScroll: true });
   }
 }
 
@@ -1942,6 +2117,23 @@ function clampSelectedIndex(index, total) {
 
   if (index >= total) {
     return 0;
+  }
+
+  return index;
+}
+
+function clampSelectedIndexAfterClose(index, total) {
+  if (total <= 0) {
+    return -1;
+  }
+
+  if (index < 0) {
+    return 0;
+  }
+
+  if (index >= total) {
+    // 关闭列表末尾结果后应落到新的末尾，而不是复用键盘循环选择跳回第一项。
+    return total - 1;
   }
 
   return index;

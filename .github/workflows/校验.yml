@@ -27,6 +27,9 @@ jobs:
       - name: 检查后台脚本语法
         run: node --check background.js
 
+      - name: 检查共享分组脚本语法
+        run: node --check grouping.js
+
       - name: 检查弹窗脚本语法
         run: node --check popup.js
 

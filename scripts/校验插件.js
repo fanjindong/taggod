@@ -6,6 +6,7 @@ const assert = require('assert');
 const rootDir = path.resolve(__dirname, '..');
 const requiredFiles = [
   'manifest.json',
+  'grouping.js',
   'background.js',
   'popup.html',
   'popup.css',
@@ -54,6 +55,10 @@ const popupCssPath = path.join(rootDir, 'popup.css');
 const popupStructureCssContent = fs.readFileSync(popupCssPath, 'utf8');
 const popupJsPath = path.join(rootDir, 'popup.js');
 const popupStructureJsContent = fs.readFileSync(popupJsPath, 'utf8');
+const groupingJsPath = path.join(rootDir, 'grouping.js');
+const groupingStructureJsContent = fs.readFileSync(groupingJsPath, 'utf8');
+const backgroundStructureJsContent = fs.readFileSync(path.join(rootDir, 'background.js'), 'utf8');
+const releaseWorkflowContent = fs.readFileSync(path.join(rootDir, '.github', 'workflows', '发布.yml'), 'utf8');
 const readmePath = path.join(rootDir, 'README.md');
 const readmeStructureContent = fs.readFileSync(readmePath, 'utf8');
 
@@ -102,6 +107,7 @@ assert.ok(popupStructureCssContent.includes('.quick-result-action-slot'));
 assert.ok(popupStructureCssContent.includes('grid-template-columns: minmax(0, 1fr) 40px;'));
 assert.ok(popupStructureJsContent.includes('function canCloseSearchResultTab'));
 assert.ok(popupStructureJsContent.includes('function getSearchResultDisplayName'));
+assert.ok(popupStructureJsContent.includes('function getSearchResultGroupLabel'));
 assert.ok(popupStructureJsContent.includes('async function closeSearchResultTab'));
 assert.ok(popupStructureJsContent.includes('function focusSelectedSearchResult'));
 assert.ok(popupStructureJsContent.includes('function getSearchResultIndexFromElement'));
@@ -125,7 +131,21 @@ assert.ok(popupStructureJsContent.includes("syncSelectedIndexFromSearchResultEle
 assert.ok(popupStructureJsContent.includes('syncSelectedIndexFromSearchResultElement(event && (event.currentTarget || event.target));'));
 assert.ok(popupStructureJsContent.includes("sendMessage('close-search-result-tab'"));
 assert.ok(popupStructureJsContent.includes('tab.isCurrentWindow && tab.active'));
-assert.ok(popupStructureJsContent.includes('audible: Boolean(tab.audible)'));
+assert.ok(popupStructureJsContent.includes('audible: Boolean(sourceTab.audible)'));
+assert.ok(backgroundStructureJsContent.includes("importScripts('grouping.js')"));
+assert.ok(popupStructureHtmlContent.indexOf('src="grouping.js"') < popupStructureHtmlContent.indexOf('src="popup.js"'));
+assert.ok(releaseWorkflowContent.includes('grouping.js'));
+assert.ok(groupingStructureJsContent.includes('function buildResolvedGroupTitleMapFromGroupInfos'));
+const batchSnapshotFunctionStart = groupingStructureJsContent.indexOf('function buildTabSnapshotsFromNormalizedSettings');
+const batchSnapshotFunctionEnd = groupingStructureJsContent.indexOf('\n  /**', batchSnapshotFunctionStart);
+const batchSnapshotFunctionSource = groupingStructureJsContent.slice(
+  batchSnapshotFunctionStart,
+  batchSnapshotFunctionEnd
+);
+assert.ok(batchSnapshotFunctionSource.includes('buildResolvedGroupTitleMapFromGroupInfos'));
+assert.ok(!batchSnapshotFunctionSource.includes('buildResolvedGroupTitleMapFromNormalizedSettings'));
+assert.ok(!backgroundStructureJsContent.includes("if (action === 'get-search-state')"));
+assert.ok(!popupStructureJsContent.includes("sendMessage('get-search-state')"));
 assert.ok(popupStructureJsContent.includes('event.stopPropagation()'));
 assert.ok(popupStructureJsContent.includes('quick-result-close-button'));
 assert.ok(popupStructureJsContent.includes('item.appendChild(openButton)'));
@@ -156,7 +176,7 @@ assert.ok(readmeStructureContent.includes('搜索结果里的普通标签页可�
 assert.ok(readmeStructureContent.includes('固定标签、当前正在看的标签和正在播放声音的标签不会显示关闭入口'));
 assert.ok(!readmeStructureContent.includes('“更多工具”里新增自定义分组规则'));
 
-for (const scriptFile of ['background.js', 'popup.js']) {
+for (const scriptFile of ['grouping.js', 'background.js', 'popup.js']) {
   const scriptPath = path.join(rootDir, scriptFile);
   const scriptContent = fs.readFileSync(scriptPath, 'utf8');
 
@@ -166,6 +186,7 @@ for (const scriptFile of ['background.js', 'popup.js']) {
 
 const backgroundPath = path.join(rootDir, 'background.js');
 const backgroundContent = fs.readFileSync(backgroundPath, 'utf8');
+const groupingContent = fs.readFileSync(groupingJsPath, 'utf8');
 const backgroundSandbox = {
   URL,
   chrome: {
@@ -191,6 +212,23 @@ const backgroundSandbox = {
 };
 
 vm.createContext(backgroundSandbox);
+vm.runInContext(groupingContent, backgroundSandbox, { filename: 'grouping.js' });
+const backgroundGroupingApi = backgroundSandbox.TabGodGrouping;
+let backgroundNormalizeSettingsCallCount = 0;
+let backgroundResolvedGroupInfoCallCount = 0;
+// 为验证批量性能，只包装后台实际导入的共享入口，不改变测试直接调用的原始接口和业务结果。
+backgroundSandbox.TabGodGrouping = Object.freeze(Object.assign({}, backgroundGroupingApi, {
+  normalizeSettings(settings) {
+    backgroundNormalizeSettingsCallCount += 1;
+    return backgroundGroupingApi.normalizeSettings(settings);
+  },
+  getResolvedGroupInfoFromNormalizedSettings(tab, normalizedSettings) {
+    backgroundResolvedGroupInfoCallCount += 1;
+    return backgroundGroupingApi.getResolvedGroupInfoFromNormalizedSettings(tab, normalizedSettings);
+  }
+}));
+// 校验脚本继续通过沙箱属性访问纯函数，避免测试依赖后台脚本内部的词法声明方式。
+Object.assign(backgroundSandbox, backgroundGroupingApi);
 vm.runInContext(backgroundContent, backgroundSandbox, { filename: 'background.js' });
 
 function makeConditionTree(children, logic = 'and') {
@@ -226,6 +264,7 @@ assert.strictEqual(recentlyClosedSnapshots.length, 1);
 assert.strictEqual(recentlyClosedSnapshots[0].resultType, 'recentlyClosed');
 assert.strictEqual(recentlyClosedSnapshots[0].sessionId, 'closed-tab-1');
 assert.strictEqual(recentlyClosedSnapshots[0].groupKey, 'example.com');
+assert.strictEqual(recentlyClosedSnapshots[0].groupTitle, 'example');
 
 const recentlyClosedWindowSnapshots = backgroundSandbox.buildRecentlyClosedTabSnapshots([
   {
@@ -252,6 +291,7 @@ assert.strictEqual(backgroundSandbox.normalizeSettings({ minTabsPerGroup: 0 }).m
 assert.strictEqual(backgroundSandbox.normalizeSettings({ minTabsPerGroup: 1 }).minTabsPerGroup, 1);
 assert.strictEqual(backgroundSandbox.normalizeSettings({ minTabsPerGroup: 2.5 }).minTabsPerGroup, 2);
 assert.strictEqual(backgroundSandbox.normalizeSettings({ minTabsPerGroup: '3' }).minTabsPerGroup, 2);
+assert.strictEqual(typeof backgroundSandbox.getResolvedGroupInfoFromNormalizedSettings, 'function');
 
 const normalizedRuleSettings = backgroundSandbox.normalizeSettings({
   minTabsPerGroup: 3,
@@ -610,6 +650,40 @@ assert.deepStrictEqual(Array.from(pendingUrlTabSnapshots, (tab) => tab.url), [
 ]);
 assert.deepStrictEqual(Array.from(pendingUrlTabSnapshots, (tab) => tab.groupKey), ['ldxp.com', 'ldxp.com']);
 assert.deepStrictEqual(Array.from(pendingUrlTabSnapshots, (tab) => tab.groupTitle), ['ldxp', 'ldxp']);
+
+const batchNormalizationSettings = {
+  minTabsPerGroup: 2,
+  priorityGroups: [],
+  groupRules: Array.from({ length: 10 }, (_, index) => ({
+    id: `batch-rule-${index}`,
+    name: `批量规则 ${index}`,
+    enabled: true,
+    targetGroupKey: `custom:批量规则 ${index}`,
+    targetTitle: `批量规则 ${index}`,
+    conditionTree: makeConditionTree([
+      { field: 'hostname', operator: 'contains', value: `never-match-${index}.invalid` }
+    ])
+  }))
+};
+const batchNormalizationTabs = Array.from({ length: 60 }, (_, index) => ({
+  id: 8000 + index,
+  title: `批量标签 ${index}`,
+  url: `https://site-${index}.example-${index}.com/page`,
+  active: false,
+  pinned: false,
+  index
+}));
+
+backgroundNormalizeSettingsCallCount = 0;
+backgroundResolvedGroupInfoCallCount = 0;
+backgroundSandbox.buildOrganizedTabs(batchNormalizationTabs, batchNormalizationSettings);
+assert.strictEqual(backgroundNormalizeSettingsCallCount, 1);
+assert.strictEqual(backgroundResolvedGroupInfoCallCount, batchNormalizationTabs.length);
+
+backgroundNormalizeSettingsCallCount = 0;
+backgroundSandbox.buildGroupSummaries(batchNormalizationTabs, batchNormalizationSettings);
+assert.strictEqual(backgroundNormalizeSettingsCallCount, 1);
+
 assert.strictEqual(typeof backgroundSandbox.normalizeRecentAccessMap, 'function');
 assert.strictEqual(typeof backgroundSandbox.activateTabAcrossWindows, 'function');
 
@@ -843,6 +917,22 @@ const reversedSameTargetDifferentTitleSnapshots = backgroundSandbox.buildTabSnap
 );
 assert.deepStrictEqual(Array.from(sameTargetDifferentTitleSnapshots, (tab) => tab.groupTitle), ['标题一', '标题一']);
 assert.deepStrictEqual(Array.from(reversedSameTargetDifferentTitleSnapshots, (tab) => tab.groupTitle), ['标题一', '标题一']);
+const secondRuleOnlySnapshots = backgroundSandbox.buildTabSnapshots(
+  [sameTargetDifferentTitleTabs[1]],
+  sameTargetDifferentTitleSettings
+);
+assert.strictEqual(secondRuleOnlySnapshots[0].groupTitle, '标题一');
+const secondRuleOnlyClosedSnapshots = backgroundSandbox.buildRecentlyClosedTabSnapshots([
+  {
+    lastModified: 1710000000000,
+    tab: {
+      sessionId: 'closed-same-target-two',
+      title: sameTargetDifferentTitleTabs[1].title,
+      url: sameTargetDifferentTitleTabs[1].url
+    }
+  }
+], sameTargetDifferentTitleSettings);
+assert.strictEqual(secondRuleOnlyClosedSnapshots[0].groupTitle, '标题一');
 
 const sameTargetDifferentTitleSummaries = backgroundSandbox.buildGroupSummaries(
   sameTargetDifferentTitleTabs,
@@ -1104,6 +1194,22 @@ assert.strictEqual(oldWorkspace.favoritedAt, 0);
 assert.strictEqual(oldWorkspace.updatedAt, 1);
 
 const popupPath = path.join(rootDir, 'popup.js');
+const popupUnifiedSearchSettings = {
+  minTabsPerGroup: 3,
+  priorityGroups: [],
+  groupRules: [
+    {
+      id: 'rule-project-a',
+      name: '项目 A',
+      enabled: true,
+      targetGroupKey: 'custom:项目 A',
+      targetTitle: '项目 A',
+      conditionTree: makeConditionTree([
+        { field: 'hostname', operator: 'equals', value: 'github.com' }
+      ])
+    }
+  ]
+};
 const popupChromeCalls = {
   messages: [],
   tabQueries: [],
@@ -1168,14 +1274,13 @@ const popupSandbox = {
       async query(queryInfo) {
         popupChromeCalls.tabQueries.push(queryInfo);
 
-        const currentTabs = [
-          { id: 1, title: '当前页面', url: 'https://a.example.com', active: true, windowId: 10, index: 0, lastAccessed: 100 }
-        ];
-        const otherTabs = [
-          { id: 2, title: '其他页面', url: 'https://b.example.com', active: false, windowId: 20, index: 0, lastAccessed: 200 }
+        const allTabs = [
+          { id: 201, title: '邮箱', url: 'https://mail.google.com/inbox', active: true, pinned: false, index: 0, windowId: 10, groupId: -1, lastAccessed: 500 },
+          { id: 202, title: '文档', url: 'https://docs.google.com/document/1', active: false, pinned: false, index: 1, windowId: 10, groupId: -1 },
+          { id: 203, title: '代码仓库', url: 'https://github.com/example/project-a', active: false, pinned: false, audible: true, index: 0, windowId: 20, groupId: -1 }
         ];
 
-        return queryInfo && queryInfo.currentWindow ? currentTabs : [...currentTabs, ...otherTabs];
+        return queryInfo && queryInfo.currentWindow ? allTabs.filter((tab) => tab.windowId === 10) : allTabs;
       }
     },
     storage: {
@@ -1184,8 +1289,8 @@ const popupSandbox = {
           popupChromeCalls.storageGets.push(keys);
 
           return {
-            'tabgod.settings': { minTabsPerGroup: 3 },
-            'tabgod.recentAccess': { 2: 300 }
+            'tabgod.settings': popupUnifiedSearchSettings,
+            'tabgod.recentAccess': { 202: 400, 203: 300 }
           };
         }
       }
@@ -1210,28 +1315,47 @@ const popupSandbox = {
 };
 
 vm.createContext(popupSandbox);
+vm.runInContext(groupingContent, popupSandbox, { filename: 'grouping.js' });
 vm.runInContext(fs.readFileSync(popupPath, 'utf8'), popupSandbox, { filename: 'popup.js' });
 
-async function assertPopupDirectStateContract() {
+async function assertPopupUnifiedSearchStateContract() {
   popupChromeCalls.messages.length = 0;
   popupChromeCalls.tabQueries.length = 0;
   popupChromeCalls.storageGets.length = 0;
 
   const localState = await popupSandbox.loadPopupStateFromBrowser();
 
-  // 首屏直接读浏览器 API，原因是唤醒后台 service worker 是冷启动的主要耗时。
+  // 搜索首屏直接读取浏览器状态，同时通过共享脚本复用后台的完整分组语义。
   assert.strictEqual(popupChromeCalls.messages.length, 0);
   assert.strictEqual(popupChromeCalls.tabQueries.length, 2);
   assert.strictEqual(popupChromeCalls.storageGets.length, 1);
-  assert.strictEqual(localState.tabs.length, 2);
-  assert.strictEqual(localState.tabs[0].groupKey, 'a.example.com');
+  assert.strictEqual(localState.tabs.length, 3);
+  assert.strictEqual(localState.tabs[0].groupKey, 'google.com');
+  assert.strictEqual(localState.tabs[0].groupTitle, 'google');
+  assert.strictEqual(localState.tabs[2].groupKey, 'custom:项目 A');
+  assert.strictEqual(localState.tabs[2].groupTitle, '项目 A');
   assert.strictEqual(localState.settings.minTabsPerGroup, 3);
-  assert.strictEqual(localState.overview.allTabCount, 2);
+  assert.strictEqual(localState.overview.allTabCount, 3);
   assert.strictEqual(localState.recentlyClosedTabs.length, 0);
   assert.strictEqual(localState.sessions.length, 0);
+  assert.strictEqual(localState.tabs[1].lastAccessedAt, 400);
+  assert.strictEqual(localState.tabs[2].audible, true);
+
+  const projectResults = popupSandbox.getVisibleTabsFromState(Object.assign({}, localState, {
+    query: '项目 A'
+  }));
+  assert.deepStrictEqual(Array.from(projectResults, (tab) => tab.id), [203]);
 }
 
 assert.strictEqual(typeof popupSandbox.getVisibleTabsFromState, 'function');
+assert.strictEqual(popupSandbox.getSearchResultGroupLabel({
+  groupKey: 'google.com',
+  groupTitle: 'google'
+}), 'google.com');
+assert.strictEqual(popupSandbox.getSearchResultGroupLabel({
+  groupKey: 'custom:项目 A',
+  groupTitle: '项目 A'
+}), '项目 A');
 assert.strictEqual(typeof popupSandbox.formatRecentAccessTime, 'function');
 assert.strictEqual(popupSandbox.formatRecentAccessTime(Date.now()), '刚刚');
 assert.strictEqual(typeof popupSandbox.getSortHelpText, 'function');
@@ -1419,6 +1543,32 @@ assert.ok(usageSvgContent.includes('分组规则是核心能力'));
 assert.ok(usageSvgContent.includes('满足全部或满足任一'));
 
 async function runAsyncChecks() {
+  await assertPopupUnifiedSearchStateContract();
+
+  const organizeWorkflowTabs = batchNormalizationTabs.slice(0, 12).map((tab) => Object.assign({}, tab, {
+    groupId: -1
+  }));
+  backgroundSandbox.queryCurrentWindowTabs = async () => organizeWorkflowTabs;
+  backgroundSandbox.chrome.storage = {
+    local: {
+      get: async () => ({
+        'tabgod.settings': batchNormalizationSettings
+      })
+    }
+  };
+  backgroundSandbox.chrome.tabs = {
+    move: async () => {},
+    group: async () => null,
+    ungroup: async () => {}
+  };
+  backgroundSandbox.chrome.tabGroups = {
+    update: async () => {}
+  };
+
+  backgroundNormalizeSettingsCallCount = 0;
+  await backgroundSandbox.organizeTabs();
+  assert.strictEqual(backgroundNormalizeSettingsCallCount, 1);
+
   backgroundSandbox.queryCurrentWindowTabs = async () => [
     { id: 201, title: '当前窗口页面', url: 'https://current.example.com/a', active: true, pinned: false, index: 0 }
   ];
@@ -1525,8 +1675,6 @@ async function runAsyncChecks() {
     /该标签受保护，未关闭/
   );
   assert.strictEqual(closeSearchResultRemovedIds.length, closeSearchResultRemovedCountBeforeReadFailure);
-
-  await assertPopupDirectStateContract();
 
   let storedSettingsForPriorityMove = {
     priorityGroups: [

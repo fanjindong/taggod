@@ -52,6 +52,7 @@ const POPUP_STORAGE_KEYS = {
   settings: 'tabgod.settings',
   recentAccess: 'tabgod.recentAccess'
 };
+const GROUPING = globalThis.TabGodGrouping;
 
 function sendMessage(action, payload = {}) {
   return chrome.runtime.sendMessage(Object.assign({ action }, payload)).then((response) => {
@@ -63,76 +64,35 @@ function sendMessage(action, payload = {}) {
   });
 }
 
-function normalizePopupSettings(settings) {
-  const normalizedSettings = Object.assign({}, state.settings, settings || {});
-
-  if (!Number.isInteger(normalizedSettings.minTabsPerGroup) || normalizedSettings.minTabsPerGroup < 1) {
-    // 弹窗首屏只需要展示阈值，非法配置回落到默认值可以避免设置输入框显示异常。
-    normalizedSettings.minTabsPerGroup = state.settings.minTabsPerGroup;
-  }
-
-  if (!Array.isArray(normalizedSettings.priorityGroups)) {
-    normalizedSettings.priorityGroups = [];
-  }
-
-  if (!Array.isArray(normalizedSettings.groupRules)) {
-    normalizedSettings.groupRules = [];
-  }
-
-  return normalizedSettings;
-}
-
-function getPopupTabUrl(tab) {
-  return String((tab && (tab.url || tab.pendingUrl)) || '');
-}
-
-function getPopupGroupKey(url) {
-  try {
-    const parsedUrl = new URL(url);
-    const hostname = String(parsedUrl.hostname || '').toLowerCase().replace(/\.$/, '');
-
-    return hostname || '其他';
-  } catch (error) {
-    // 首屏本地路径只做搜索展示，异常地址归为“其他”即可，完整分组规则仍由后台处理。
-    return '其他';
-  }
-}
-
 function getPopupLastAccessedAt(tab, recentAccessMap) {
   if (Number.isFinite(tab && tab.lastAccessed)) {
     return tab.lastAccessed;
   }
 
-  const storedAccessedAt = recentAccessMap && Number(recentAccessMap[String(tab && tab.id)]);
+  const storedAccessedAt = Number(recentAccessMap && recentAccessMap[String(tab && tab.id)]);
 
   return Number.isFinite(storedAccessedAt) ? storedAccessedAt : 0;
 }
 
 function buildPopupTabSnapshots(tabs, context = {}) {
+  const safeTabs = Array.isArray(tabs) ? tabs : [];
   const currentWindowId = Number.isInteger(context.currentWindowId) ? context.currentWindowId : null;
   const recentAccessMap = context.recentAccessMap || {};
+  // 分组键和显示名来自共享领域逻辑，弹窗这里只补充浏览器窗口和声音状态。
+  const normalizedSettings = context.normalizedSettings || GROUPING.normalizeSettings(context.settings);
+  const snapshots = GROUPING.buildTabSnapshotsFromNormalizedSettings(safeTabs, normalizedSettings);
 
-  return (Array.isArray(tabs) ? tabs : []).map((tab) => {
-    const url = getPopupTabUrl(tab);
-    const groupKey = getPopupGroupKey(url);
-    const isCurrentWindow = Number.isInteger(tab.windowId) && tab.windowId === currentWindowId;
+  return snapshots.map((snapshot, index) => {
+    const sourceTab = safeTabs[index] || {};
+    const isCurrentWindow = Number.isInteger(sourceTab.windowId) && sourceTab.windowId === currentWindowId;
 
-    return {
-      id: tab.id,
-      title: tab.title || '未命名标签',
-      url,
-      favIconUrl: tab.favIconUrl || '',
-      active: Boolean(tab.active),
-      pinned: Boolean(tab.pinned),
-      audible: Boolean(tab.audible),
-      index: Number.isInteger(tab.index) ? tab.index : 0,
-      groupKey,
-      groupTitle: groupKey,
-      windowId: Number.isInteger(tab.windowId) ? tab.windowId : null,
+    return Object.assign({}, snapshot, {
+      audible: Boolean(sourceTab.audible),
+      windowId: Number.isInteger(sourceTab.windowId) ? sourceTab.windowId : null,
       isCurrentWindow,
       windowLabel: isCurrentWindow ? '当前窗口' : '其他窗口',
-      lastAccessedAt: getPopupLastAccessedAt(tab, recentAccessMap)
-    };
+      lastAccessedAt: getPopupLastAccessedAt(sourceTab, recentAccessMap)
+    });
   });
 }
 
@@ -141,7 +101,7 @@ function buildPopupOverview(currentTabs, allTabs) {
   const groupSet = new Set();
 
   (Array.isArray(currentTabs) ? currentTabs : []).forEach((tab) => {
-    domainSet.add(getPopupGroupKey(getPopupTabUrl(tab)));
+    domainSet.add(GROUPING.getDomainKey(GROUPING.getTabUrl(tab)));
 
     if (typeof tab.groupId === 'number' && tab.groupId >= 0) {
       groupSet.add(tab.groupId);
@@ -171,13 +131,15 @@ async function loadPopupStateFromBrowser() {
       POPUP_STORAGE_KEYS.recentAccess
     ])
   ]);
-  const activeTab = currentTabs.find((tab) => tab.active);
-  const currentWindowId = activeTab && Number.isInteger(activeTab.windowId) ? activeTab.windowId : null;
-  const settings = normalizePopupSettings(stored[POPUP_STORAGE_KEYS.settings]);
+  const currentWindowTab = currentTabs.find((tab) => tab.active) || currentTabs[0];
+  const currentWindowId = currentWindowTab && Number.isInteger(currentWindowTab.windowId)
+    ? currentWindowTab.windowId
+    : null;
+  const settings = GROUPING.normalizeSettings(stored[POPUP_STORAGE_KEYS.settings]);
   const recentAccessMap = stored[POPUP_STORAGE_KEYS.recentAccess] || {};
 
   return {
-    tabs: buildPopupTabSnapshots(allTabs, { currentWindowId, recentAccessMap }),
+    tabs: buildPopupTabSnapshots(allTabs, { currentWindowId, recentAccessMap, normalizedSettings: settings }),
     recentlyClosedTabs: [],
     groups: [],
     overview: buildPopupOverview(currentTabs, allTabs),
@@ -521,6 +483,18 @@ function getSearchResultDisplayName(tab) {
   }
 
   return '未命名标签页';
+}
+
+function getSearchResultGroupLabel(tab) {
+  const groupKey = String(tab && tab.groupKey ? tab.groupKey : '').trim();
+  const groupTitle = String(tab && tab.groupTitle ? tab.groupTitle : '').trim();
+
+  if (groupKey && !groupKey.startsWith('custom:')) {
+    // 搜索结果需要完整主域名帮助区分不同后缀，不能沿用原生分组的短标题。
+    return groupKey;
+  }
+
+  return groupTitle || groupKey.replace(/^custom:/, '') || '其他';
 }
 
 function handleSearchResultNavigationKeydown(event, options = {}) {
@@ -1642,7 +1616,7 @@ function renderTabs() {
     item.className = `tab-item quick-result-item${index === selectedIndex ? ' is-selected' : ''}`;
     item.dataset.action = tab.resultType === 'recentlyClosed' ? 'restore' : 'activate';
     item.dataset.tabId = String(tab.id);
-    const groupTitle = tab.groupTitle || tab.groupKey;
+    const groupLabel = getSearchResultGroupLabel(tab);
     const isRecentlyClosed = tab.resultType === 'recentlyClosed';
     const windowLabel = isRecentlyClosed ? '最近关闭' : (tab.windowLabel || (tab.isCurrentWindow ? '当前窗口' : '其他窗口'));
     const accessLabel = formatRecentAccessTime(Number(tab.lastAccessedAt) || 0);
@@ -1653,7 +1627,7 @@ function renderTabs() {
     openButton.innerHTML = `
       <span class="quick-result-main">
         <span class="tab-title" title="${escapeHtml(tab.title)}">${escapeHtml(tab.title)}</span>
-        <span class="tab-url" title="${escapeHtml(tab.groupKey)} · ${escapeHtml(tab.url)}">${escapeHtml(groupTitle)} · ${escapeHtml(tab.url)}</span>
+        <span class="tab-url" title="${escapeHtml(tab.groupKey)} · ${escapeHtml(tab.url)}">${escapeHtml(groupLabel)} · ${escapeHtml(tab.url)}</span>
       </span>
       <span class="quick-result-meta">${escapeHtml(metaText)}</span>
     `;

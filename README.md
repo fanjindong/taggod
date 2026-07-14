@@ -45,7 +45,7 @@
 | 整理当前窗口 | `Command+Shift+Y` | `Ctrl+Shift+Y` |
 | 保存当前窗口为工作集 | `Command+Shift+S` | `Ctrl+Shift+S` |
 
-如果快捷键和其他扩展冲突，可以在 Chrome 的 `chrome://extensions/shortcuts` 里调整。
+如需修改默认快捷键，可以在 Chrome 地址栏打开 `chrome://extensions/shortcuts`，然后为“标签之神”设置新的快捷键。
 
 ## 一键理顺满屏标签
 

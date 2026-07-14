@@ -1,19 +1,30 @@
+if (typeof importScripts === 'function') {
+  // 后台和弹窗必须加载同一份分组规则实现，避免两个入口再次产生语义分叉。
+  importScripts('grouping.js');
+}
+
+const {
+  DEFAULT_SETTINGS,
+  MAX_GROUP_RULE_CONDITION_COUNT,
+  buildGroupRuleIdentity,
+  buildResolvedGroupTitleMapFromGroupInfos,
+  buildTabSnapshotsFromNormalizedSettings,
+  countConditionTreeConditions,
+  doesRuleMatchTab,
+  getDomainKey,
+  getHostnameKey,
+  getResolvedGroupInfoFromNormalizedSettings,
+  getShortGroupTitle,
+  getTabUrl,
+  normalizeGroupRule,
+  normalizeConditionTree,
+  normalizeSettings
+} = globalThis.TabGodGrouping;
+
 const STORAGE_KEYS = {
   sessions: 'tabgod.sessions',
   settings: 'tabgod.settings',
   recentAccess: 'tabgod.recentAccess'
-};
-
-const DEFAULT_SETTINGS = {
-  // 限制保存数量是为了避免本地存储无限增长，同时保留最近的工作现场。
-  maxSessionCount: 10,
-  // 默认至少两个同主域名标签才建组，原因是单标签分组通常只会增加标签栏噪音。
-  minTabsPerGroup: 2,
-  organizeWithGroups: true,
-  duplicateKeepStrategy: 'active-or-left',
-  // 自定义规则默认为空，旧用户升级后仍沿用主域名分组。
-  groupRules: [],
-  priorityGroups: []
 };
 
 const GROUP_COLORS = ['blue', 'green', 'yellow', 'red', 'purple', 'cyan', 'orange', 'pink', 'grey'];
@@ -25,31 +36,6 @@ const RECENTLY_CLOSED_SESSION_LIMIT = 25;
 // 会话里的关闭窗口可能包含多个标签，拆分后的搜索结果仍要限量，避免弹窗输入时处理过多数据。
 const RECENTLY_CLOSED_SEARCH_LIMIT = 100;
 
-// 浏览器没有内置可注册主域名 API，这里保留常见多级公共后缀，避免把站点错误合并到公共后缀本身。
-const COMMON_MULTI_PART_PUBLIC_SUFFIXES = new Set([
-  'com.cn',
-  'net.cn',
-  'org.cn',
-  'gov.cn',
-  'edu.cn',
-  'co.uk',
-  'org.uk',
-  'ac.uk',
-  'com.au',
-  'net.au',
-  'org.au',
-  'co.jp',
-  'ne.jp',
-  'or.jp',
-  'co.kr',
-  'or.kr',
-  'com.br',
-  'com.mx',
-  'com.sg',
-  'com.hk',
-  'com.tw'
-]);
-
 const TRACKING_QUERY_PARAMS = new Set([
   'utm_source',
   'utm_medium',
@@ -60,14 +46,6 @@ const TRACKING_QUERY_PARAMS = new Set([
   'fbclid',
   'gclid'
 ]);
-
-const GROUP_RULE_FIELDS = new Set(['hostname', 'primaryDomain', 'path', 'url', 'title']);
-const GROUP_RULE_OPERATORS = new Set(['contains', 'equals', 'startsWith']);
-const GROUP_RULE_LOGICS = new Set(['and', 'or']);
-// 单条规则最多 8 个真实条件，原因是 OR 域名场景需要比旧版更多空间，但弹窗仍要保持可控。
-const MAX_GROUP_RULE_CONDITION_COUNT = 8;
-// 条件组最多两层，避免弹窗编辑器变成难以理解的表达式树。
-const MAX_GROUP_RULE_GROUP_DEPTH = 2;
 
 function normalizeUrlForDuplicate(url) {
   try {
@@ -85,423 +63,9 @@ function normalizeUrlForDuplicate(url) {
   }
 }
 
-function isIpAddressHost(hostname) {
-  // IP 地址没有可注册主域名，保持原值可以避免把不同内网服务错误合并。
-  return /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.includes(':');
-}
-
-function getPrimaryDomainFromHostname(hostname) {
-  const normalizedHostname = String(hostname || '').toLowerCase().replace(/\.$/, '');
-
-  if (!normalizedHostname) {
-    return '其他';
-  }
-
-  if (isIpAddressHost(normalizedHostname)) {
-    return normalizedHostname;
-  }
-
-  const parts = normalizedHostname.split('.').filter(Boolean);
-
-  if (parts.length <= 2) {
-    // 短主机名和二段域名本身已经是最稳定的分组键，不需要继续裁剪。
-    return normalizedHostname;
-  }
-
-  const publicSuffix = parts.slice(-2).join('.');
-
-  if (COMMON_MULTI_PART_PUBLIC_SUFFIXES.has(publicSuffix) && parts.length >= 3) {
-    // 多级公共后缀需要保留注册名，否则 example.com.cn 会被错误合并为 com.cn。
-    return parts.slice(-3).join('.');
-  }
-
-  return parts.slice(-2).join('.');
-}
-
-function getDomainKey(url) {
-  try {
-    const parsedUrl = new URL(url);
-    return getPrimaryDomainFromHostname(parsedUrl.hostname);
-  } catch (error) {
-    // 无法解析的网址通常来自浏览器内部页面，归入“其他”能避免整理流程中断。
-    return '其他';
-  }
-}
-
-function getHostnameKey(url) {
-  try {
-    const parsedUrl = new URL(url);
-    return String(parsedUrl.hostname || '其他').toLowerCase().replace(/\.$/, '');
-  } catch (error) {
-    // 异常网址没有可靠子域名，使用“其他”可以让它们在主域名兜底组内稳定排序。
-    return '其他';
-  }
-}
-
-function getTabUrl(tab) {
-  // Chrome 更新或懒加载恢复期间，标签可能暂时只有 pendingUrl；保存时必须保留它，否则工作集会把页面当成空地址跳过。
-  return String((tab && (tab.url || tab.pendingUrl)) || '');
-}
-
-function buildRuleMatchContext(tab) {
-  const url = getTabUrl(tab);
-
-  try {
-    const parsedUrl = new URL(url);
-    const hostname = String(parsedUrl.hostname || '').toLowerCase().replace(/\.$/, '');
-
-    return {
-      hostname,
-      primaryDomain: getPrimaryDomainFromHostname(hostname),
-      path: parsedUrl.pathname || '/',
-      url,
-      title: tab && tab.title ? tab.title : ''
-    };
-  } catch (error) {
-    // 异常网址仍允许用标题匹配，其他 URL 字段用空值避免误判。
-    return {
-      hostname: '其他',
-      primaryDomain: '其他',
-      path: '',
-      url,
-      title: tab && tab.title ? tab.title : ''
-    };
-  }
-}
-
-function doesRuleConditionMatch(context, condition) {
-  const actualValue = String(context[condition.field] || '').toLowerCase();
-  const expectedValue = String(condition.value || '').toLowerCase();
-
-  if (condition.operator === 'equals') {
-    return actualValue === expectedValue;
-  }
-
-  if (condition.operator === 'startsWith') {
-    return actualValue.startsWith(expectedValue);
-  }
-
-  // contains 作为模糊包含匹配，是为了让“域名包含 / 标题包含 / 路径包含”保持直观；需要精确匹配时可使用 equals。
-  return actualValue.includes(expectedValue);
-}
-
-function doesConditionTreeNodeMatch(context, node) {
-  if (!node) {
-    return false;
-  }
-
-  if (node.type === 'condition') {
-    return doesRuleConditionMatch(context, node);
-  }
-
-  if (node.type !== 'group' || !Array.isArray(node.children) || node.children.length === 0) {
-    return false;
-  }
-
-  if (node.logic === 'or') {
-    return node.children.some((child) => doesConditionTreeNodeMatch(context, child));
-  }
-
-  return node.children.every((child) => doesConditionTreeNodeMatch(context, child));
-}
-
-function doesConditionTreeMatchTab(conditionTree, tab) {
-  const context = buildRuleMatchContext(tab);
-
-  return doesConditionTreeNodeMatch(context, conditionTree);
-}
-
-function doesRuleMatchTab(rule, tab) {
-  if (tab && tab.pinned) {
-    // 固定标签不参与规则匹配，因为固定区由浏览器管理，整理规则不应改变其归属。
-    return false;
-  }
-
-  if (!rule || !rule.enabled || !rule.conditionTree) {
-    return false;
-  }
-
-  return doesConditionTreeMatchTab(rule.conditionTree, tab);
-}
-
-function getResolvedGroupInfo(tab, settings) {
-  const normalizedSettings = normalizeSettings(settings);
-
-  if (tab && tab.pinned) {
-    const url = getTabUrl(tab);
-
-    return {
-      groupKey: getDomainKey(url),
-      title: getDomainKey(url),
-      ruleId: '',
-      minTabsPerGroup: normalizedSettings.minTabsPerGroup
-    };
-  }
-
-  for (const rule of normalizedSettings.groupRules) {
-    if (doesRuleMatchTab(rule, tab)) {
-      return {
-        groupKey: rule.targetGroupKey,
-        title: rule.targetTitle,
-        ruleId: rule.id,
-        minTabsPerGroup: rule.minTabsPerGroup || normalizedSettings.minTabsPerGroup
-      };
-    }
-  }
-
-  const groupKey = getDomainKey(getTabUrl(tab));
-
-  return {
-    groupKey,
-    title: groupKey,
-    ruleId: '',
-    minTabsPerGroup: normalizedSettings.minTabsPerGroup
-  };
-}
-
 function getGroupColor(index) {
   // Chrome 原生分组颜色数量有限，循环使用可以保证任意数量主域名都有稳定颜色。
   return GROUP_COLORS[index % GROUP_COLORS.length];
-}
-
-function normalizeMinTabsPerGroup(value) {
-  const numericValue = typeof value === 'number' ? value : Number.NaN;
-
-  if (!Number.isInteger(numericValue) || numericValue < 1) {
-    // 阈值必须至少为 1，原因是 0 或负数会让“至少几个标签才分组”的语义失效。
-    return DEFAULT_SETTINGS.minTabsPerGroup;
-  }
-
-  return numericValue;
-}
-
-function normalizeOptionalMinTabsPerGroup(value) {
-  if (value === null || value === undefined || value === '') {
-    // 规则阈值为空时沿用全局阈值，避免每条规则都要求重复填写。
-    return null;
-  }
-
-  const numericValue = typeof value === 'number' ? value : Number.NaN;
-
-  if (!Number.isInteger(numericValue) || numericValue < 1) {
-    return null;
-  }
-
-  return numericValue;
-}
-
-function normalizeGroupRuleCondition(condition) {
-  const field = String(condition && condition.field ? condition.field : '').trim();
-  const operator = String(condition && condition.operator ? condition.operator : '').trim();
-  const value = String(condition && condition.value ? condition.value : '').trim();
-
-  if (!GROUP_RULE_FIELDS.has(field) || !GROUP_RULE_OPERATORS.has(operator) || !value) {
-    return null;
-  }
-
-  return {
-    field,
-    operator,
-    value
-  };
-}
-
-function countConditionTreeConditions(tree) {
-  if (!tree) {
-    return 0;
-  }
-
-  if (tree.type === 'condition') {
-    return 1;
-  }
-
-  if (tree.type !== 'group' || !Array.isArray(tree.children)) {
-    return 0;
-  }
-
-  return tree.children.reduce((total, child) => total + countConditionTreeConditions(child), 0);
-}
-
-function normalizeConditionTreeNode(node, depth = 1) {
-  if (!node || typeof node !== 'object') {
-    return null;
-  }
-
-  if (node.type === 'condition') {
-    const condition = normalizeGroupRuleCondition(node);
-
-    return condition ? Object.assign({ type: 'condition' }, condition) : null;
-  }
-
-  if (node.type !== 'group' || depth > MAX_GROUP_RULE_GROUP_DEPTH) {
-    return null;
-  }
-
-  const rawLogic = String(node.logic || '').trim();
-  const logic = GROUP_RULE_LOGICS.has(rawLogic) ? rawLogic : 'and';
-  const children = (Array.isArray(node.children) ? node.children : [])
-    .map((child) => normalizeConditionTreeNode(child, depth + 1))
-    .filter(Boolean);
-
-  if (children.length === 0) {
-    // 空组没有明确匹配含义，直接丢弃可以避免误命中全部标签。
-    return null;
-  }
-
-  return {
-    type: 'group',
-    logic,
-    children
-  };
-}
-
-function normalizeConditionTree(tree) {
-  const normalizedTree = normalizeConditionTreeNode(tree, 1);
-
-  if (!normalizedTree || normalizedTree.type !== 'group') {
-    return null;
-  }
-
-  if (countConditionTreeConditions(normalizedTree) > MAX_GROUP_RULE_CONDITION_COUNT) {
-    return null;
-  }
-
-  return normalizedTree;
-}
-
-function buildGroupRuleIdentity(rule) {
-  const targetTitle = String(rule && rule.targetTitle ? rule.targetTitle : rule && rule.name ? rule.name : '').trim();
-  const name = String(rule && rule.name ? rule.name : targetTitle).trim();
-  const targetGroupKey = String(rule && rule.targetGroupKey ? rule.targetGroupKey : targetTitle ? `custom:${targetTitle}` : '').trim();
-  const conditionTree = normalizeConditionTree(rule && rule.conditionTree);
-
-  return {
-    name,
-    enabled: rule && Object.prototype.hasOwnProperty.call(rule, 'enabled') ? Boolean(rule.enabled) : true,
-    targetGroupKey,
-    targetTitle,
-    minTabsPerGroup: normalizeOptionalMinTabsPerGroup(rule && rule.minTabsPerGroup),
-    conditionTree
-  };
-}
-
-function buildStableGroupRuleBaseId(identity) {
-  const source = [
-    identity.name,
-    String(identity.enabled),
-    String(identity.minTabsPerGroup),
-    identity.targetGroupKey,
-    identity.targetTitle,
-    JSON.stringify(identity.conditionTree || null)
-  ].join('|');
-  let hash = 0;
-
-  for (let charIndex = 0; charIndex < source.length; charIndex += 1) {
-    // 左移 5 位相当于乘以 32，用于让前序字符对 hash 保持影响。
-    hash = ((hash << 5) - hash) + source.charCodeAt(charIndex);
-    hash |= 0;
-  }
-
-  return `rule-${Math.abs(hash)}`;
-}
-
-function normalizeGroupRule(rule, generatedId) {
-  const now = Date.now();
-  const identity = buildGroupRuleIdentity(rule);
-
-  if (!identity.name || !identity.targetTitle || !identity.targetGroupKey || !identity.conditionTree) {
-    // 无法解释或会误命中的规则直接丢弃，原因是旧配置可能被手动写坏。
-    return null;
-  }
-
-  return {
-    id: String(rule && rule.id ? rule.id : generatedId),
-    name: identity.name,
-    enabled: identity.enabled,
-    targetGroupKey: identity.targetGroupKey,
-    targetTitle: identity.targetTitle,
-    minTabsPerGroup: identity.minTabsPerGroup,
-    conditionTree: identity.conditionTree,
-    // 时间字段只是兼容旧配置的展示/排查元数据，不参与稳定 id 和匹配行为。
-    createdAt: Number(rule && rule.createdAt) || now,
-    updatedAt: Number(rule && rule.updatedAt) || now
-  };
-}
-
-function normalizeGroupRules(groupRules) {
-  if (!Array.isArray(groupRules)) {
-    return [];
-  }
-
-  const usedIds = new Set();
-  const generatedIdCounts = new Map();
-
-  return groupRules.map((rule) => {
-    const hasRuleId = Boolean(rule && rule.id);
-    const baseId = buildStableGroupRuleBaseId(buildGroupRuleIdentity(rule));
-    const duplicateCount = hasRuleId ? 1 : (generatedIdCounts.get(baseId) || 0) + 1;
-
-    if (!hasRuleId) {
-      generatedIdCounts.set(baseId, duplicateCount);
-    }
-
-    // 旧配置或导入配置缺失 id 时，规则管理需要尽量稳定定位；只有完全相同的无 id 规则才用序号后缀。
-    return normalizeGroupRule(rule, duplicateCount === 1 ? baseId : `${baseId}-${duplicateCount}`);
-  }).filter((rule) => {
-    if (!rule || usedIds.has(rule.id)) {
-      // 重复编号会让编辑和排序目标不明确，保留第一条更符合用户看到的列表顺序。
-      return false;
-    }
-
-    usedIds.add(rule.id);
-    return true;
-  });
-}
-
-function normalizePriorityGroups(priorityGroups) {
-  if (!Array.isArray(priorityGroups)) {
-    return [];
-  }
-
-  const usedGroupKeys = new Set();
-
-  return priorityGroups.map((group, index) => {
-    const groupKey = String(group && group.groupKey ? group.groupKey : '').trim();
-
-    if (!groupKey || usedGroupKeys.has(groupKey)) {
-      // 重复分组键会让显式顺序出现歧义，保留第一条更符合用户在列表中看到的顺序。
-      return null;
-    }
-
-    usedGroupKeys.add(groupKey);
-
-    return {
-      groupKey,
-      title: String(group && group.title ? group.title : groupKey).trim() || groupKey,
-      starredAt: Number(group && group.starredAt) || Date.now(),
-      // 旧版本没有 sortOrder，按原数组位置迁移，原因是原数组顺序就是用户逐个星标后的唯一稳定顺序。
-      sortOrder: Number.isInteger(group && group.sortOrder) && group.sortOrder >= 0 ? group.sortOrder : index
-    };
-  }).filter(Boolean).sort((left, right) => {
-    if (left.sortOrder !== right.sortOrder) {
-      return left.sortOrder - right.sortOrder;
-    }
-
-    return left.starredAt - right.starredAt;
-  }).map((group, index) => Object.assign({}, group, {
-    // 重新压紧编号可以避免删除或历史异常数据留下空洞，后续上移下移只需要交换数组项。
-    sortOrder: index
-  }));
-}
-
-function normalizeSettings(settings) {
-  const normalized = Object.assign({}, DEFAULT_SETTINGS, settings || {});
-  normalized.minTabsPerGroup = normalizeMinTabsPerGroup(normalized.minTabsPerGroup);
-
-  normalized.priorityGroups = normalizePriorityGroups(normalized.priorityGroups);
-  normalized.groupRules = normalizeGroupRules(normalized.groupRules);
-
-  return normalized;
 }
 
 function normalizeWorkspace(workspace) {
@@ -583,17 +147,25 @@ function shouldCreateNativeGroup(tabIds, settings) {
   return Array.isArray(tabIds) && tabIds.length >= normalizedSettings.minTabsPerGroup;
 }
 
-function resolveGroupThreshold(groupTabs, settings) {
-  const normalizedSettings = normalizeSettings(settings);
+/**
+ * 使用已归一化配置解析分组阈值，批量路径必须复用该入口以避免重复处理全部规则。
+ * @param {Array<Object>} groupTabs 同一最终分组内的标签页。
+ * @param {Object} normalizedSettings 已归一化的插件配置。
+ * @param {string} resolvedGroupKey 调用方已知的最终分组键，传入后可避免重复解析首个标签。
+ * @returns {number} 当前分组采用的建组阈值。
+ */
+function resolveGroupThresholdFromNormalizedSettings(groupTabs, normalizedSettings, resolvedGroupKey = '') {
   const safeGroupTabs = Array.isArray(groupTabs) ? groupTabs : [];
-  const firstGroupInfo = safeGroupTabs.length > 0 ? getResolvedGroupInfo(safeGroupTabs[0], normalizedSettings) : null;
+  const groupKey = resolvedGroupKey || (safeGroupTabs.length > 0
+    ? getResolvedGroupInfoFromNormalizedSettings(safeGroupTabs[0], normalizedSettings).groupKey
+    : '');
 
-  if (!firstGroupInfo) {
+  if (!groupKey) {
     return normalizedSettings.minTabsPerGroup;
   }
 
   for (const rule of normalizedSettings.groupRules) {
-    if (rule.targetGroupKey !== firstGroupInfo.groupKey) {
+    if (rule.targetGroupKey !== groupKey) {
       continue;
     }
 
@@ -610,96 +182,62 @@ function resolveGroupThreshold(groupTabs, settings) {
   return normalizedSettings.minTabsPerGroup;
 }
 
-function shouldCreateNativeGroupForTabs(groupTabs, settings) {
+function resolveGroupThreshold(groupTabs, settings) {
+  return resolveGroupThresholdFromNormalizedSettings(groupTabs, normalizeSettings(settings));
+}
+
+/**
+ * 使用已归一化配置判断同组标签是否达到建组阈值。
+ * @param {Array<Object>} groupTabs 同一最终分组内的标签页。
+ * @param {Object} normalizedSettings 已归一化的插件配置。
+ * @param {string} resolvedGroupKey 调用方已知的最终分组键。
+ * @returns {boolean} 是否应创建 Chrome 原生分组。
+ */
+function shouldCreateNativeGroupForTabsFromNormalizedSettings(groupTabs, normalizedSettings, resolvedGroupKey = '') {
   const safeGroupTabs = Array.isArray(groupTabs) ? groupTabs : [];
-  const threshold = resolveGroupThreshold(safeGroupTabs, settings);
+  const threshold = resolveGroupThresholdFromNormalizedSettings(
+    safeGroupTabs,
+    normalizedSettings,
+    resolvedGroupKey
+  );
 
   return safeGroupTabs.length >= threshold;
 }
 
-function getShortGroupTitle(groupKey) {
-  const normalizedGroupKey = String(groupKey || '其他').toLowerCase().replace(/\.$/, '');
-
-  if (!normalizedGroupKey || normalizedGroupKey === '其他' || isIpAddressHost(normalizedGroupKey)) {
-    // 无法确认公共后缀的特殊分组保持原样，避免把兜底名称或 IP 地址截断成难懂内容。
-    return normalizedGroupKey || '其他';
-  }
-
-  const parts = normalizedGroupKey.split('.').filter(Boolean);
-
-  if (parts.length <= 1) {
-    return normalizedGroupKey;
-  }
-
-  const multiPartSuffix = parts.slice(-2).join('.');
-
-  if (COMMON_MULTI_PART_PUBLIC_SUFFIXES.has(multiPartSuffix)) {
-    // 多级公共后缀要整体省略，否则 example.com.cn 会只变成 example.com。
-    return parts.slice(0, -2).join('.') || normalizedGroupKey;
-  }
-
-  return parts.slice(0, -1).join('.') || normalizedGroupKey;
-}
-
-function buildGroupTitleMap(groupKeys) {
-  const uniqueGroupKeys = Array.from(new Set((Array.isArray(groupKeys) ? groupKeys : [])
-    .map((groupKey) => String(groupKey || '其他'))));
-  const titleBuckets = new Map();
-  const titleMap = new Map();
-
-  uniqueGroupKeys.forEach((groupKey) => {
-    const shortTitle = getShortGroupTitle(groupKey);
-    const bucket = titleBuckets.get(shortTitle) || [];
-    bucket.push(groupKey);
-    titleBuckets.set(shortTitle, bucket);
-  });
-
-  uniqueGroupKeys.forEach((groupKey) => {
-    const shortTitle = getShortGroupTitle(groupKey);
-    const conflictGroupKeys = titleBuckets.get(shortTitle) || [];
-
-    // 短名冲突时回退完整主域名，原因是 foo.com 和 foo.net 不能都显示成 foo。
-    titleMap.set(groupKey, conflictGroupKeys.length > 1 ? groupKey : shortTitle);
-  });
-
-  return titleMap;
-}
-
-function buildResolvedGroupTitleMap(tabs, settings = DEFAULT_SETTINGS) {
-  const normalizedSettings = normalizeSettings(settings);
-  const safeTabs = Array.isArray(tabs) ? tabs : [];
-  const groupInfos = safeTabs.map((tab) => getResolvedGroupInfo(tab, normalizedSettings));
-  const domainTitleMap = buildGroupTitleMap(groupInfos
-    .filter((info) => !info.ruleId)
-    .map((info) => info.groupKey));
-  const titleMap = new Map(domainTitleMap);
-  const customTitleGroupKeys = new Set();
-
-  normalizedSettings.groupRules.forEach((rule) => {
-    if (customTitleGroupKeys.has(rule.targetGroupKey)) {
-      return;
-    }
-
-    const matchedResolvedTab = safeTabs.some((tab, index) => {
-      return groupInfos[index].groupKey === rule.targetGroupKey && doesRuleMatchTab(rule, tab);
-    });
-
-    if (matchedResolvedTab) {
-      // 同组多规则标题按规则列表顺序裁决，原因是这与规则优先级和阈值裁决一致，可避免标签顺序影响标题。
-      titleMap.set(rule.targetGroupKey, rule.targetTitle);
-      customTitleGroupKeys.add(rule.targetGroupKey);
-    }
-  });
-
-  return titleMap;
+function shouldCreateNativeGroupForTabs(groupTabs, settings) {
+  return shouldCreateNativeGroupForTabsFromNormalizedSettings(groupTabs, normalizeSettings(settings));
 }
 
 function isPriorityGroup(settings, groupKey) {
   return settings.priorityGroups.some((group) => group.groupKey === groupKey);
 }
 
-function buildPriorityGroupOrderMap(settings) {
-  const normalizedSettings = normalizeSettings(settings);
+/**
+ * 为一次批量整理预先解析全部标签分组，避免排序比较器重复遍历规则。
+ * @param {Array<Object>} tabs Chrome 标签页列表。
+ * @param {Object} normalizedSettings 已归一化的插件配置。
+ * @returns {Map<Object, Object>} 标签对象到最终分组信息的映射。
+ */
+function buildResolvedGroupInfoMap(tabs, normalizedSettings) {
+  const resolvedGroupInfoMap = new Map();
+
+  (Array.isArray(tabs) ? tabs : []).forEach((tab) => {
+    resolvedGroupInfoMap.set(tab, getResolvedGroupInfoFromNormalizedSettings(tab, normalizedSettings));
+  });
+
+  return resolvedGroupInfoMap;
+}
+
+function getResolvedGroupInfoFromMap(tab, normalizedSettings, resolvedGroupInfoMap) {
+  if (resolvedGroupInfoMap && resolvedGroupInfoMap.has(tab)) {
+    return resolvedGroupInfoMap.get(tab);
+  }
+
+  // 独立调用兼容旧入口；批量整理会始终命中预计算映射。
+  return getResolvedGroupInfoFromNormalizedSettings(tab, normalizedSettings);
+}
+
+function buildPriorityGroupOrderMapFromNormalizedSettings(normalizedSettings) {
   const orderMap = new Map();
 
   normalizedSettings.priorityGroups.forEach((group, index) => {
@@ -710,8 +248,11 @@ function buildPriorityGroupOrderMap(settings) {
   return orderMap;
 }
 
-function buildCurrentGroupOrderMap(tabs, settings = DEFAULT_SETTINGS) {
-  const normalizedSettings = normalizeSettings(settings);
+function buildPriorityGroupOrderMap(settings) {
+  return buildPriorityGroupOrderMapFromNormalizedSettings(normalizeSettings(settings));
+}
+
+function buildCurrentGroupOrderMapFromNormalizedSettings(tabs, normalizedSettings, resolvedGroupInfoMap = null) {
   const orderMap = new Map();
 
   tabs.forEach((tab) => {
@@ -719,7 +260,7 @@ function buildCurrentGroupOrderMap(tabs, settings = DEFAULT_SETTINGS) {
       return;
     }
 
-    const groupKey = getResolvedGroupInfo(tab, normalizedSettings).groupKey;
+    const groupKey = getResolvedGroupInfoFromMap(tab, normalizedSettings, resolvedGroupInfoMap).groupKey;
 
     if (!orderMap.has(groupKey)) {
       // 当前从左到右的首次出现顺序代表用户刚刚手动拖好的分组顺序。
@@ -730,8 +271,11 @@ function buildCurrentGroupOrderMap(tabs, settings = DEFAULT_SETTINGS) {
   return orderMap;
 }
 
-function buildGroupableDomainSet(tabs, settings) {
-  const normalizedSettings = normalizeSettings(settings);
+function buildCurrentGroupOrderMap(tabs, settings = DEFAULT_SETTINGS) {
+  return buildCurrentGroupOrderMapFromNormalizedSettings(tabs, normalizeSettings(settings));
+}
+
+function buildGroupableDomainSetFromNormalizedSettings(tabs, normalizedSettings, resolvedGroupInfoMap = null) {
   const domainTabs = new Map();
 
   (Array.isArray(tabs) ? tabs : []).forEach((tab) => {
@@ -739,34 +283,46 @@ function buildGroupableDomainSet(tabs, settings) {
       return;
     }
 
-    const groupKey = getResolvedGroupInfo(tab, normalizedSettings).groupKey;
+    const groupKey = getResolvedGroupInfoFromMap(tab, normalizedSettings, resolvedGroupInfoMap).groupKey;
     const groupTabs = domainTabs.get(groupKey) || [];
     groupTabs.push(tab);
     domainTabs.set(groupKey, groupTabs);
   });
 
   return new Set(Array.from(domainTabs.entries())
-    .filter(([, groupTabs]) => {
+    .filter(([groupKey, groupTabs]) => {
       // 排序阶段必须复用真实建组阈值，否则单标签主域名会被当成分组插到原生分组之前。
-      return shouldCreateNativeGroupForTabs(groupTabs, normalizedSettings);
+      return shouldCreateNativeGroupForTabsFromNormalizedSettings(groupTabs, normalizedSettings, groupKey);
     })
     .map(([groupKey]) => groupKey));
 }
 
-function buildOrganizedTabs(tabs, settings) {
+function buildGroupableDomainSet(tabs, settings) {
+  return buildGroupableDomainSetFromNormalizedSettings(tabs, normalizeSettings(settings));
+}
+
+function buildOrganizedTabsFromNormalizedSettings(tabs, normalizedSettings) {
   const safeTabs = Array.isArray(tabs) ? tabs : [];
-  const normalizedSettings = normalizeSettings(settings);
-  const currentGroupOrderMap = buildCurrentGroupOrderMap(safeTabs, normalizedSettings);
-  const priorityGroupOrderMap = buildPriorityGroupOrderMap(normalizedSettings);
-  const groupableDomainSet = buildGroupableDomainSet(safeTabs, normalizedSettings);
+  const resolvedGroupInfoMap = buildResolvedGroupInfoMap(safeTabs, normalizedSettings);
+  const currentGroupOrderMap = buildCurrentGroupOrderMapFromNormalizedSettings(
+    safeTabs,
+    normalizedSettings,
+    resolvedGroupInfoMap
+  );
+  const priorityGroupOrderMap = buildPriorityGroupOrderMapFromNormalizedSettings(normalizedSettings);
+  const groupableDomainSet = buildGroupableDomainSetFromNormalizedSettings(
+    safeTabs,
+    normalizedSettings,
+    resolvedGroupInfoMap
+  );
 
   return [...safeTabs].sort((left, right) => {
     if (left.pinned !== right.pinned) {
       return left.pinned ? -1 : 1;
     }
 
-    const leftGroupInfo = getResolvedGroupInfo(left, normalizedSettings);
-    const rightGroupInfo = getResolvedGroupInfo(right, normalizedSettings);
+    const leftGroupInfo = resolvedGroupInfoMap.get(left);
+    const rightGroupInfo = resolvedGroupInfoMap.get(right);
     const leftDomain = leftGroupInfo.groupKey;
     const rightDomain = rightGroupInfo.groupKey;
     const leftIsGroupable = groupableDomainSet.has(leftDomain);
@@ -816,40 +372,16 @@ function buildOrganizedTabs(tabs, settings) {
   });
 }
 
+function buildOrganizedTabs(tabs, settings) {
+  return buildOrganizedTabsFromNormalizedSettings(tabs, normalizeSettings(settings));
+}
+
 async function queryCurrentWindowTabs() {
   return chrome.tabs.query({ currentWindow: true });
 }
 
 async function queryAllWindowTabs() {
   return chrome.tabs.query({});
-}
-
-function buildTabSnapshot(tab, settings = DEFAULT_SETTINGS) {
-  const groupInfo = getResolvedGroupInfo(tab, settings);
-  const url = getTabUrl(tab);
-
-  return {
-    id: tab.id,
-    title: tab.title || '未命名标签',
-    url,
-    favIconUrl: tab.favIconUrl || '',
-    active: Boolean(tab.active),
-    pinned: Boolean(tab.pinned),
-    index: Number.isInteger(tab.index) ? tab.index : 0,
-    groupKey: groupInfo.groupKey,
-    groupTitle: groupInfo.title
-  };
-}
-
-function buildTabSnapshots(tabs, settings = DEFAULT_SETTINGS) {
-  const safeTabs = Array.isArray(tabs) ? tabs : [];
-  const normalizedSettings = normalizeSettings(settings);
-  const snapshots = safeTabs.map((tab) => buildTabSnapshot(tab, normalizedSettings));
-  const titleMap = buildResolvedGroupTitleMap(safeTabs, normalizedSettings);
-
-  return snapshots.map((snapshot) => Object.assign({}, snapshot, {
-    groupTitle: titleMap.get(snapshot.groupKey) || snapshot.groupTitle || snapshot.groupKey
-  }));
 }
 
 function buildRecentlyClosedTabSnapshot(tab, options) {
@@ -861,7 +393,8 @@ function buildRecentlyClosedTabSnapshot(tab, options) {
   }
 
   const url = safeTab.url || '';
-  const groupInfo = getResolvedGroupInfo(safeTab, options.settings);
+  const groupInfo = options.groupInfo
+    || getResolvedGroupInfoFromNormalizedSettings(safeTab, options.settings);
 
   return {
     resultType: 'recentlyClosed',
@@ -880,9 +413,9 @@ function buildRecentlyClosedTabSnapshot(tab, options) {
   };
 }
 
-function buildRecentlyClosedTabSnapshots(recentlyClosedSessions, settings) {
+function buildRecentlyClosedTabSnapshotsFromNormalizedSettings(recentlyClosedSessions, normalizedSettings) {
   const snapshots = [];
-  const normalizedSettings = normalizeSettings(settings);
+  const snapshotGroupInfos = [];
 
   for (const session of Array.isArray(recentlyClosedSessions) ? recentlyClosedSessions : []) {
     if (snapshots.length >= RECENTLY_CLOSED_SEARCH_LIMIT) {
@@ -895,16 +428,25 @@ function buildRecentlyClosedTabSnapshots(recentlyClosedSessions, settings) {
     const fallbackSessionId = session.sessionId || '';
 
     if (session.tab) {
+      const sessionId = tabSessionId || fallbackSessionId;
+
+      if (!sessionId) {
+        continue;
+      }
+
+      const groupInfo = getResolvedGroupInfoFromNormalizedSettings(session.tab, normalizedSettings);
       const snapshot = buildRecentlyClosedTabSnapshot(session.tab, {
         closedAt,
         // Chrome 把可恢复编号放在 tab/window 上，兼容兜底只用于非标准或旧数据结构。
-        sessionId: tabSessionId || fallbackSessionId,
+        sessionId,
+        groupInfo,
         settings: normalizedSettings,
         sourceIndex: snapshots.length
       });
 
       if (snapshot) {
         snapshots.push(snapshot);
+        snapshotGroupInfos.push(groupInfo);
       }
 
       continue;
@@ -917,21 +459,42 @@ function buildRecentlyClosedTabSnapshots(recentlyClosedSessions, settings) {
         break;
       }
 
+      const sessionId = windowSessionId || tab.sessionId || fallbackSessionId;
+
+      if (!sessionId) {
+        continue;
+      }
+
+      const groupInfo = getResolvedGroupInfoFromNormalizedSettings(tab, normalizedSettings);
       const snapshot = buildRecentlyClosedTabSnapshot(tab, {
         closedAt,
         // 关闭窗口里的单个结果恢复时会恢复整个窗口，这是 Chrome sessionId 的原生粒度。
-        sessionId: windowSessionId || tab.sessionId || fallbackSessionId,
+        sessionId,
+        groupInfo,
         settings: normalizedSettings,
         sourceIndex: snapshots.length
       });
 
       if (snapshot) {
         snapshots.push(snapshot);
+        snapshotGroupInfos.push(groupInfo);
       }
     }
   }
 
-  return snapshots;
+  const titleMap = buildResolvedGroupTitleMapFromGroupInfos(snapshotGroupInfos, normalizedSettings);
+
+  return snapshots.map((snapshot) => Object.assign({}, snapshot, {
+    // 最近关闭结果也必须使用批量标题映射，避免同一分组在搜索池内出现两种显示名。
+    groupTitle: titleMap.get(snapshot.groupKey) || snapshot.groupTitle || snapshot.groupKey
+  }));
+}
+
+function buildRecentlyClosedTabSnapshots(recentlyClosedSessions, settings) {
+  return buildRecentlyClosedTabSnapshotsFromNormalizedSettings(
+    recentlyClosedSessions,
+    normalizeSettings(settings)
+  );
 }
 
 function chooseDuplicateKeepTab(tabs) {
@@ -1035,7 +598,10 @@ async function getRecentlyClosedState() {
   const settings = normalizeSettings(stored[STORAGE_KEYS.settings]);
 
   return {
-    recentlyClosedTabs: buildRecentlyClosedTabSnapshots(recentlyClosedSessions, settings)
+    recentlyClosedTabs: buildRecentlyClosedTabSnapshotsFromNormalizedSettings(
+      recentlyClosedSessions,
+      settings
+    )
   };
 }
 
@@ -1050,7 +616,7 @@ async function getManagementState() {
   const settings = normalizeSettings(stored[STORAGE_KEYS.settings]);
 
   return {
-    groups: buildGroupSummaries(tabs, settings),
+    groups: buildGroupSummariesFromNormalizedSettings(tabs, settings),
     sessions: sortWorkspaces(stored[STORAGE_KEYS.sessions] || []),
     settings
   };
@@ -1065,7 +631,7 @@ async function organizeTabs() {
     return { organizedCount: 0, groupCount: 0 };
   }
 
-  const sortedTabs = buildOrganizedTabs(tabs, settings);
+  const sortedTabs = buildOrganizedTabsFromNormalizedSettings(tabs, settings);
 
   for (let index = 0; index < sortedTabs.length; index += 1) {
     const tab = sortedTabs[index];
@@ -1076,7 +642,7 @@ async function organizeTabs() {
     }
   }
 
-  const reconcileResult = await reconcileCurrentWindowGroups(settings);
+  const reconcileResult = await reconcileCurrentWindowGroupsFromNormalizedSettings(settings);
 
   return {
     organizedCount: tabs.length,
@@ -1084,19 +650,19 @@ async function organizeTabs() {
   };
 }
 
-async function reconcileCurrentWindowGroups(settings) {
-  const normalizedSettings = normalizeSettings(settings);
+async function reconcileCurrentWindowGroupsFromNormalizedSettings(normalizedSettings) {
   const tabs = await queryCurrentWindowTabs();
   const groups = new Map();
-  const groupCandidateTabs = [];
+  const groupInfos = [];
 
   tabs.forEach((tab) => {
     if (tab.pinned || typeof tab.id !== 'number') {
       return;
     }
 
-    groupCandidateTabs.push(tab);
-    const groupKey = getResolvedGroupInfo(tab, normalizedSettings).groupKey;
+    const groupInfo = getResolvedGroupInfoFromNormalizedSettings(tab, normalizedSettings);
+    const groupKey = groupInfo.groupKey;
+    groupInfos.push(groupInfo);
     const groupTabs = groups.get(groupKey) || [];
     groupTabs.push(tab);
     groups.set(groupKey, groupTabs);
@@ -1104,12 +670,12 @@ async function reconcileCurrentWindowGroups(settings) {
 
   let groupedCount = 0;
   let ungroupedTabCount = 0;
-  const titleMap = buildResolvedGroupTitleMap(groupCandidateTabs, normalizedSettings);
+  const titleMap = buildResolvedGroupTitleMapFromGroupInfos(groupInfos, normalizedSettings);
 
   for (const [groupKey, groupTabs] of groups.entries()) {
     const tabIds = groupTabs.map((tab) => tab.id);
 
-    if (!shouldCreateNativeGroupForTabs(groupTabs, normalizedSettings)) {
+    if (!shouldCreateNativeGroupForTabsFromNormalizedSettings(groupTabs, normalizedSettings, groupKey)) {
       const groupedTabIds = groupTabs
         .filter((tab) => typeof tab.groupId === 'number' && tab.groupId >= 0)
         .map((tab) => tab.id);
@@ -1142,18 +708,26 @@ async function reconcileCurrentWindowGroups(settings) {
   };
 }
 
-function buildGroupSummaries(tabs, settings) {
-  const normalizedSettings = normalizeSettings(settings);
+async function reconcileCurrentWindowGroups(settings) {
+  return reconcileCurrentWindowGroupsFromNormalizedSettings(normalizeSettings(settings));
+}
+
+function buildGroupSummariesFromNormalizedSettings(tabs, normalizedSettings) {
   const groupMap = new Map();
-  const currentGroupOrderMap = buildCurrentGroupOrderMap(tabs, normalizedSettings);
-  const priorityGroupOrderMap = buildPriorityGroupOrderMap(normalizedSettings);
+  const resolvedGroupInfoMap = buildResolvedGroupInfoMap(tabs, normalizedSettings);
+  const currentGroupOrderMap = buildCurrentGroupOrderMapFromNormalizedSettings(
+    tabs,
+    normalizedSettings,
+    resolvedGroupInfoMap
+  );
+  const priorityGroupOrderMap = buildPriorityGroupOrderMapFromNormalizedSettings(normalizedSettings);
 
   tabs.forEach((tab) => {
     if (tab.pinned || typeof tab.id !== 'number') {
       return;
     }
 
-    const groupInfo = getResolvedGroupInfo(tab, normalizedSettings);
+    const groupInfo = resolvedGroupInfoMap.get(tab);
     const groupKey = groupInfo.groupKey;
     const summary = groupMap.get(groupKey) || {
       groupKey,
@@ -1161,6 +735,7 @@ function buildGroupSummaries(tabs, settings) {
       tabCount: 0,
       tabIds: [],
       tabs: [],
+      groupInfos: [],
       starred: isPriorityGroup(normalizedSettings, groupKey),
       currentOrder: currentGroupOrderMap.get(groupKey) ?? Number.POSITIVE_INFINITY
     };
@@ -1168,14 +743,22 @@ function buildGroupSummaries(tabs, settings) {
     summary.tabCount += 1;
     summary.tabIds.push(tab.id);
     summary.tabs.push(tab);
+    summary.groupInfos.push(groupInfo);
     groupMap.set(groupKey, summary);
   });
 
   const groupSummaries = Array.from(groupMap.values()).filter((summary) => {
     // 优先分组列表只展示真实会创建原生分组的项，避免单标签主域名出现无意义星标入口。
-    return shouldCreateNativeGroupForTabs(summary.tabs, normalizedSettings);
+    return shouldCreateNativeGroupForTabsFromNormalizedSettings(
+      summary.tabs,
+      normalizedSettings,
+      summary.groupKey
+    );
   });
-  const titleMap = buildResolvedGroupTitleMap(groupSummaries.flatMap((summary) => summary.tabs), normalizedSettings);
+  const titleMap = buildResolvedGroupTitleMapFromGroupInfos(
+    groupSummaries.flatMap((summary) => summary.groupInfos),
+    normalizedSettings
+  );
 
   return groupSummaries.sort((left, right) => {
     if (left.starred !== right.starred) {
@@ -1204,6 +787,10 @@ function buildGroupSummaries(tabs, settings) {
     starred: summary.starred,
     currentOrder: summary.currentOrder
   }));
+}
+
+function buildGroupSummaries(tabs, settings) {
+  return buildGroupSummariesFromNormalizedSettings(tabs, normalizeSettings(settings));
 }
 
 async function scanDuplicateTabs() {
@@ -1269,7 +856,7 @@ async function saveWorkspace(name) {
   const settings = normalizeSettings(stored[STORAGE_KEYS.settings]);
   const existingSessions = sortWorkspaces(stored[STORAGE_KEYS.sessions] || []);
   const createdAt = Date.now();
-  const snapshots = buildTabSnapshots(tabs, settings);
+  const snapshots = buildTabSnapshotsFromNormalizedSettings(tabs, settings);
   const activeTab = snapshots.find((tab) => tab.active);
   const groups = buildGroupSnapshots(snapshots);
   const workspaceName = String(name || '').trim() || `${formatDateTime(createdAt)} 的工作集`;
@@ -1694,7 +1281,7 @@ async function updateSettings(partialSettings) {
     settings,
     partialSettings || {}
   ));
-  const reconcileResult = await reconcileCurrentWindowGroups(settings);
+  const reconcileResult = await reconcileCurrentWindowGroupsFromNormalizedSettings(settings);
 
   return Object.assign({
     settings
@@ -1909,7 +1496,7 @@ async function restoreSession(sessionId, options = {}) {
   }
 
   // 恢复工作集可能发生在已有同名分组的窗口中，必须重新梳理整个窗口才能把旧标签和新恢复标签合并到同一个原生分组。
-  await reconcileCurrentWindowGroups(settings);
+  await reconcileCurrentWindowGroupsFromNormalizedSettings(settings);
 
   const tabToActivate = createdTabs.find((tab) => tab.url === session.activeUrl) || createdTabs[0];
 
@@ -1926,25 +1513,26 @@ async function restoreSession(sessionId, options = {}) {
 async function regroupRestoredTabs(tabs, settings = DEFAULT_SETTINGS) {
   const normalizedSettings = normalizeSettings(settings);
   const groups = new Map();
-  const groupCandidateTabs = [];
+  const groupInfos = [];
 
   tabs.forEach((tab) => {
     if (tab.pinned || typeof tab.id !== 'number') {
       return;
     }
 
-    groupCandidateTabs.push(tab);
-    const groupKey = getResolvedGroupInfo(tab, normalizedSettings).groupKey;
+    const groupInfo = getResolvedGroupInfoFromNormalizedSettings(tab, normalizedSettings);
+    const groupKey = groupInfo.groupKey;
+    groupInfos.push(groupInfo);
     const groupTabs = groups.get(groupKey) || [];
     groupTabs.push(tab);
     groups.set(groupKey, groupTabs);
   });
 
   let groupIndex = 0;
-  const titleMap = buildResolvedGroupTitleMap(groupCandidateTabs, normalizedSettings);
+  const titleMap = buildResolvedGroupTitleMapFromGroupInfos(groupInfos, normalizedSettings);
 
   for (const [groupKey, groupTabs] of groups.entries()) {
-    if (!shouldCreateNativeGroupForTabs(groupTabs, normalizedSettings)) {
+    if (!shouldCreateNativeGroupForTabsFromNormalizedSettings(groupTabs, normalizedSettings, groupKey)) {
       // 恢复工作集时沿用用户阈值，避免恢复后出现用户刚刚选择隐藏的低数量分组。
       continue;
     }

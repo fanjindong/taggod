@@ -114,6 +114,7 @@ node scripts/校验插件.js
 也可以分别检查脚本语法：
 
 ```bash
+node --check grouping.js
 node --check background.js
 node --check popup.js
 ```

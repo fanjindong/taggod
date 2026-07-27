@@ -35,6 +35,8 @@ if (manifest.manifest_version !== 3) {
   throw new Error('manifest.json 必须使用 Manifest V3');
 }
 
+assert.strictEqual(manifest.version, '0.2.4');
+
 if (!manifest.permissions.includes('tabs')
   || !manifest.permissions.includes('tabGroups')
   || !manifest.permissions.includes('storage')
@@ -155,6 +157,10 @@ assert.ok(popupStructureCssContent.includes('.quick-result-close-button'));
 assert.ok(popupStructureCssContent.includes('.quick-result-close-button:focus-visible'));
 assert.ok(popupStructureJsContent.includes('activeManagementPanel'));
 assert.ok(popupStructureJsContent.includes('renderManagementOverview'));
+assert.ok(popupStructureJsContent.includes('chrome.commands.getAll()'));
+assert.ok(popupStructureJsContent.includes('chrome.sessions.onChanged.addListener'));
+assert.ok(backgroundStructureJsContent.includes("showCommandBadge('✓'"));
+assert.ok(backgroundStructureJsContent.includes('STORAGE_KEYS.pendingCleanup'));
 // 首屏常用操作必须避免空状态文本占位，否则整理按钮和辅助操作之间会出现无意义留白。
 assert.ok(popupStructureCssContent.includes('.action-status-text:empty'));
 // 弹窗主体不能拉伸自动网格行，否则可用高度增加时会把各模块之间的间距放大。
@@ -174,6 +180,9 @@ assert.ok(readmeStructureContent.includes('最近关闭的标签页'));
 assert.ok(readmeStructureContent.includes('`sessions`'));
 assert.ok(readmeStructureContent.includes('搜索结果里的普通标签页可以直接关闭'));
 assert.ok(readmeStructureContent.includes('固定标签、当前正在看的标签和正在播放声音的标签不会显示关闭入口'));
+assert.ok(readmeStructureContent.includes('实际生效的打开和整理快捷键'));
+assert.ok(readmeStructureContent.includes('一次性会话令牌'));
+assert.ok(readmeStructureContent.includes('`chrome.storage.session`'));
 assert.ok(!readmeStructureContent.includes('“更多工具”里新增自定义分组规则'));
 
 for (const scriptFile of ['grouping.js', 'background.js', 'popup.js']) {
@@ -187,8 +196,20 @@ for (const scriptFile of ['grouping.js', 'background.js', 'popup.js']) {
 const backgroundPath = path.join(rootDir, 'background.js');
 const backgroundContent = fs.readFileSync(backgroundPath, 'utf8');
 const groupingContent = fs.readFileSync(groupingJsPath, 'utf8');
+const backgroundCommandListeners = [];
+const backgroundBadgeCalls = [];
+const backgroundTimers = new Map();
+let backgroundTimerId = 0;
 const backgroundSandbox = {
   URL,
+  setTimeout(callback, delay) {
+    backgroundTimerId += 1;
+    backgroundTimers.set(backgroundTimerId, { callback, delay });
+    return backgroundTimerId;
+  },
+  clearTimeout(timerId) {
+    backgroundTimers.delete(timerId);
+  },
   chrome: {
     runtime: {
       onMessage: {
@@ -197,7 +218,17 @@ const backgroundSandbox = {
     },
     commands: {
       onCommand: {
-        addListener() {}
+        addListener(listener) {
+          backgroundCommandListeners.push(listener);
+        }
+      }
+    },
+    action: {
+      async setBadgeText(options) {
+        backgroundBadgeCalls.push({ type: 'text', options });
+      },
+      async setBadgeBackgroundColor(options) {
+        backgroundBadgeCalls.push({ type: 'color', options });
       }
     },
     tabs: {
@@ -265,6 +296,7 @@ assert.strictEqual(recentlyClosedSnapshots[0].resultType, 'recentlyClosed');
 assert.strictEqual(recentlyClosedSnapshots[0].sessionId, 'closed-tab-1');
 assert.strictEqual(recentlyClosedSnapshots[0].groupKey, 'example.com');
 assert.strictEqual(recentlyClosedSnapshots[0].groupTitle, 'example');
+assert.strictEqual(recentlyClosedSnapshots[0].restoreScope, 'tab');
 
 const recentlyClosedWindowSnapshots = backgroundSandbox.buildRecentlyClosedTabSnapshots([
   {
@@ -284,6 +316,8 @@ const recentlyClosedWindowSnapshots = backgroundSandbox.buildRecentlyClosedTabSn
 assert.strictEqual(recentlyClosedWindowSnapshots.length, 1);
 assert.strictEqual(recentlyClosedWindowSnapshots[0].sessionId, 'closed-window-1');
 assert.strictEqual(recentlyClosedWindowSnapshots[0].groupKey, 'example.com');
+assert.strictEqual(recentlyClosedWindowSnapshots[0].restoreScope, 'window');
+assert.ok(recentlyClosedWindowSnapshots[0].windowLabel.includes('1 个标签'));
 
 assert.strictEqual(backgroundSandbox.normalizeSettings({}).minTabsPerGroup, 2);
 assert.strictEqual(backgroundSandbox.normalizeSettings({ minTabsPerGroup: 3 }).minTabsPerGroup, 3);
@@ -1158,14 +1192,26 @@ assert.strictEqual(
   backgroundSandbox.normalizeUrlForDuplicate('https://example.com/a?x=1#section'),
   'https://example.com/a?x=1#section'
 );
+assert.notStrictEqual(
+  backgroundSandbox.normalizeUrlForDuplicate('https://example.com/a?ref=main'),
+  backgroundSandbox.normalizeUrlForDuplicate('https://example.com/a?ref=release')
+);
 
 const duplicateGroups = backgroundSandbox.buildDuplicateGroups(duplicateTabs);
 assert.strictEqual(duplicateGroups.length, 1);
 assert.strictEqual(duplicateGroups[0].reason, '忽略追踪参数后重复');
 assert.strictEqual(duplicateGroups[0].keepTabId, 3);
 // vm 沙箱返回的数组原型不同，转成本上下文数组后再比较内容，避免误判业务结果。
-assert.deepStrictEqual(Array.from(duplicateGroups[0].closeTabIds), [1, 2]);
+assert.deepStrictEqual(Array.from(duplicateGroups[0].closeTabIds), [1]);
 assert.strictEqual(backgroundSandbox.buildOverview(duplicateTabs).duplicateCount, null);
+
+const protectedDuplicateGroups = backgroundSandbox.buildDuplicateGroups([
+  { id: 21, title: '保留页面', url: 'https://example.com/protected', active: false, pinned: false, audible: false, index: 0 },
+  { id: 22, title: '播放页面', url: 'https://example.com/protected', active: false, pinned: false, audible: true, index: 1 },
+  { id: 23, title: '跳转页面', url: 'https://example.com/protected', pendingUrl: 'https://example.com/next', active: false, pinned: false, audible: false, index: 2 }
+]);
+assert.strictEqual(protectedDuplicateGroups.length, 1);
+assert.deepStrictEqual(Array.from(protectedDuplicateGroups[0].closeTabIds), [21]);
 
 const exactDuplicateGroups = backgroundSandbox.buildDuplicateGroups([
   { id: 10, title: '同页', url: 'https://example.com/same', active: false, pinned: false, index: 2 },
@@ -1213,31 +1259,56 @@ const popupUnifiedSearchSettings = {
 const popupChromeCalls = {
   messages: [],
   tabQueries: [],
-  storageGets: []
+  storageGets: [],
+  commandReads: 0,
+  sessionChangedListeners: []
 };
+const popupElements = new Map();
+
+function createPopupTestElement() {
+  return {
+    addEventListener() {},
+    appendChild() {},
+    querySelectorAll() {
+      return [];
+    },
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    },
+    focus() {},
+    scrollIntoView() {},
+    classList: {
+      toggle() {},
+      add() {},
+      remove() {}
+    },
+    attributes: {},
+    style: {},
+    dataset: {},
+    innerHTML: '',
+    textContent: '',
+    value: '',
+    hidden: false,
+    disabled: false
+  };
+}
+
+let popupCommandList = [
+  { name: '_execute_action', shortcut: 'Alt+Shift+L' },
+  { name: 'organize-tabs', shortcut: 'Alt+Shift+Y' },
+  { name: 'save-session', shortcut: '' }
+];
 const popupSandbox = {
   console,
   URL,
   document: {
     addEventListener() {},
-    getElementById() {
-      return {
-        addEventListener() {},
-        appendChild() {},
-        querySelectorAll() {
-          return [];
-        },
-        classList: {
-          toggle() {}
-        },
-        style: {},
-        dataset: {},
-        innerHTML: '',
-        textContent: '',
-        value: '',
-        hidden: false,
-        disabled: false
-      };
+    getElementById(id) {
+      if (!popupElements.has(id)) {
+        popupElements.set(id, createPopupTestElement());
+      }
+
+      return popupElements.get(id);
     },
     querySelectorAll() {
       return [];
@@ -1251,6 +1322,7 @@ const popupSandbox = {
         },
         addEventListener() {},
         appendChild() {},
+        setAttribute() {},
         querySelectorAll() {
           return [];
         },
@@ -1268,6 +1340,19 @@ const popupSandbox = {
       sendMessage(message) {
         popupChromeCalls.messages.push(message);
         return Promise.resolve({ ok: true, payload: {} });
+      }
+    },
+    commands: {
+      async getAll() {
+        popupChromeCalls.commandReads += 1;
+        return popupCommandList;
+      }
+    },
+    sessions: {
+      onChanged: {
+        addListener(listener) {
+          popupChromeCalls.sessionChangedListeners.push(listener);
+        }
       }
     },
     tabs: {
@@ -1345,6 +1430,33 @@ async function assertPopupUnifiedSearchStateContract() {
     query: '项目 A'
   }));
   assert.deepStrictEqual(Array.from(projectResults, (tab) => tab.id), [203]);
+
+  await popupSandbox.loadCommandShortcuts();
+  assert.strictEqual(popupChromeCalls.commandReads, 1);
+  assert.strictEqual(popupElements.get('openShortcutText').textContent, 'Alt+Shift+L');
+  assert.strictEqual(popupElements.get('organizeShortcutText').textContent, 'Alt+Shift+Y');
+  assert.strictEqual(
+    popupElements.get('openShortcutHint').attributes['aria-label'],
+    '打开弹窗快捷键：Alt+Shift+L'
+  );
+
+  popupCommandList = [
+    { name: '_execute_action', shortcut: '' },
+    { name: 'organize-tabs', shortcut: '' }
+  ];
+  await popupSandbox.loadCommandShortcuts();
+  assert.strictEqual(popupElements.get('openShortcutText').textContent, '未设置');
+  assert.strictEqual(popupElements.get('organizeShortcutText').textContent, '未设置');
+
+  popupSandbox.bindRecentlyClosedSessionEvents();
+  assert.strictEqual(popupChromeCalls.sessionChangedListeners.length, 1);
+  vm.runInContext(`
+    state.recentlyClosedTabs = [{ id: 'closed-old' }];
+    state.recentlyClosedTabsLoaded = true;
+  `, popupSandbox);
+  popupSandbox.resetRecentlyClosedTabsCache();
+  assert.strictEqual(vm.runInContext('state.recentlyClosedTabs.length', popupSandbox), 0);
+  assert.strictEqual(vm.runInContext('state.recentlyClosedTabsLoaded', popupSandbox), false);
 }
 
 assert.strictEqual(typeof popupSandbox.getVisibleTabsFromState, 'function');
@@ -1491,11 +1603,12 @@ assert.ok(popupHtml.includes('把当前窗口整理成清晰分组'));
 assert.ok(popupHtml.includes('moreToolsButton'));
 assert.ok(popupHtml.includes('moreToolsSection'));
 assert.ok(popupHtml.includes('打开弹窗'));
-assert.ok(popupHtml.includes('⌘⇧L'));
-assert.ok(popupHtml.includes('Ctrl Shift L'));
-assert.ok(popupHtml.includes('默认快捷键'));
-assert.ok(popupHtml.includes('⌘⇧Y'));
-assert.ok(popupHtml.includes('Ctrl Shift Y'));
+assert.ok(popupHtml.includes('openShortcutHint'));
+assert.ok(popupHtml.includes('openShortcutText'));
+assert.ok(popupHtml.includes('organizeShortcutHint'));
+assert.ok(popupHtml.includes('organizeShortcutText'));
+assert.ok(!popupHtml.includes('⌘⇧L'));
+assert.ok(!popupHtml.includes('Ctrl Shift Y'));
 assert.ok(popupHtml.includes('不会直接关闭'));
 assert.ok(popupHtml.includes('groupRuleList'));
 assert.ok(popupHtml.includes('groupRuleForm'));
@@ -1569,6 +1682,27 @@ async function runAsyncChecks() {
   await backgroundSandbox.organizeTabs();
   assert.strictEqual(backgroundNormalizeSettingsCallCount, 1);
 
+  backgroundBadgeCalls.length = 0;
+  backgroundTimers.clear();
+  const organizeCommandResult = await backgroundSandbox.handleCommand('organize-tabs');
+  assert.strictEqual(organizeCommandResult.success, true);
+  assert.ok(backgroundBadgeCalls.some((call) => call.type === 'text' && call.options.text === '✓'));
+  const successBadgeTimer = Array.from(backgroundTimers.values())[0];
+  assert.strictEqual(successBadgeTimer.delay, 3000);
+  await successBadgeTimer.callback();
+  assert.ok(backgroundBadgeCalls.some((call) => call.type === 'text' && call.options.text === ''));
+
+  backgroundBadgeCalls.length = 0;
+  const failedSaveCommandResult = await backgroundSandbox.handleCommand('save-session');
+  assert.strictEqual(failedSaveCommandResult.success, false);
+  assert.ok(backgroundBadgeCalls.some((call) => call.type === 'text' && call.options.text === '!'));
+
+  backgroundBadgeCalls.length = 0;
+  const unknownCommandResult = await backgroundSandbox.handleCommand('unknown-command');
+  assert.strictEqual(unknownCommandResult.handled, false);
+  assert.strictEqual(backgroundBadgeCalls.length, 0);
+  assert.strictEqual(backgroundCommandListeners.length, 1);
+
   backgroundSandbox.queryCurrentWindowTabs = async () => [
     { id: 201, title: '当前窗口页面', url: 'https://current.example.com/a', active: true, pinned: false, index: 0 }
   ];
@@ -1591,6 +1725,34 @@ async function runAsyncChecks() {
     (await backgroundSandbox.getDuplicateOverview()).duplicateCount,
     1
   );
+
+  const duplicateCloseRemovedIds = [];
+  const duplicateCloseKey = backgroundSandbox.normalizeUrlForDuplicate('https://example.com/dup');
+  const duplicateCloseTabs = new Map([
+    [301, { id: 301, title: '原保留页', url: 'https://example.com/dup', windowId: 31, active: false, pinned: false, audible: false, index: 0 }],
+    [302, { id: 302, title: '已跳转页', url: 'https://example.com/changed', windowId: 31, active: false, pinned: false, audible: false, index: 1 }],
+    [303, { id: 303, title: '已变为活动页', url: 'https://example.com/dup', windowId: 31, active: true, pinned: false, audible: false, index: 2 }],
+    [304, { id: 304, title: '仍可关闭页', url: 'https://example.com/dup', windowId: 31, active: false, pinned: false, audible: false, index: 3 }],
+    [305, { id: 305, title: '确认后新增页', url: 'https://example.com/dup', windowId: 31, active: false, pinned: false, audible: false, index: 4 }]
+  ]);
+  backgroundSandbox.chrome.tabs = {
+    query: async ({ windowId }) => Array.from(duplicateCloseTabs.values()).filter((tab) => tab.windowId === windowId),
+    remove: async (tabId) => {
+      duplicateCloseRemovedIds.push(tabId);
+      duplicateCloseTabs.delete(tabId);
+    }
+  };
+  const duplicateCloseResult = await backgroundSandbox.closeSelectedDuplicateTabs(31, [{
+    duplicateKey: duplicateCloseKey,
+    closeTabIds: [302, 303, 304]
+  }]);
+  assert.deepStrictEqual({ ...duplicateCloseResult }, {
+    closedCount: 1,
+    skippedCount: 2,
+    failedCount: 0
+  });
+  assert.deepStrictEqual(duplicateCloseRemovedIds, [304]);
+  assert.strictEqual(duplicateCloseTabs.has(305), true);
 
   const closeSearchResultRemovedIds = [];
   const closeSearchResultTabs = new Map([
@@ -1675,6 +1837,101 @@ async function runAsyncChecks() {
     /该标签受保护，未关闭/
   );
   assert.strictEqual(closeSearchResultRemovedIds.length, closeSearchResultRemovedCountBeforeReadFailure);
+
+  const cleanupLocalState = {
+    'tabgod.settings': {
+      minTabsPerGroup: 2,
+      maxSessionCount: 10,
+      priorityGroups: [],
+      groupRules: []
+    },
+    'tabgod.sessions': []
+  };
+  const cleanupSessionState = {};
+  const cleanupLocalSets = [];
+  const cleanupRemovedIds = [];
+  const cleanupTabs = new Map([
+    [401, { id: 401, title: '当前页面', url: 'https://example.com/current', windowId: 41, active: true, pinned: false, audible: false, index: 0 }],
+    [402, { id: 402, title: '普通页面', url: 'https://example.com/normal', windowId: 41, active: false, pinned: false, audible: false, index: 1 }],
+    [403, { id: 403, title: '固定页面', url: 'https://example.com/pinned', windowId: 41, active: false, pinned: true, audible: false, index: 2 }],
+    [404, { id: 404, title: '播放页面', url: 'https://example.com/audio', windowId: 41, active: false, pinned: false, audible: true, index: 3 }],
+    [405, { id: 405, title: '稍后跳转页面', url: 'https://example.com/changed-later', windowId: 41, active: false, pinned: false, audible: false, index: 4 }],
+    [406, { id: 406, title: '稍后移动页面', url: 'https://example.com/moved-later', windowId: 41, active: false, pinned: false, audible: false, index: 5 }],
+    [407, { id: 407, title: '稍后导航页面', url: 'https://example.com/pending-later', windowId: 41, active: false, pinned: false, audible: false, index: 6 }],
+    [408, { id: 408, title: '关闭失败页面', url: 'https://example.com/fail', windowId: 41, active: false, pinned: false, audible: false, index: 7 }]
+  ]);
+  backgroundSandbox.chrome.storage = {
+    local: {
+      async get(keys) {
+        const result = {};
+        (Array.isArray(keys) ? keys : [keys]).forEach((key) => {
+          result[key] = cleanupLocalState[key];
+        });
+        return result;
+      },
+      async set(values) {
+        cleanupLocalSets.push(values);
+        Object.assign(cleanupLocalState, values);
+      }
+    },
+    session: {
+      async get(keys) {
+        const result = {};
+        (Array.isArray(keys) ? keys : [keys]).forEach((key) => {
+          result[key] = cleanupSessionState[key];
+        });
+        return result;
+      },
+      async set(values) {
+        Object.assign(cleanupSessionState, values);
+      },
+      async remove(keys) {
+        (Array.isArray(keys) ? keys : [keys]).forEach((key) => {
+          delete cleanupSessionState[key];
+        });
+      }
+    }
+  };
+  backgroundSandbox.chrome.tabs = {
+    query: async ({ windowId }) => Array.from(cleanupTabs.values()).filter((tab) => tab.windowId === windowId),
+    get: async (tabId) => {
+      if (!cleanupTabs.has(tabId)) {
+        throw new Error('标签不存在');
+      }
+      return cleanupTabs.get(tabId);
+    },
+    remove: async (tabId) => {
+      if (tabId === 408) {
+        throw new Error('模拟关闭失败');
+      }
+      cleanupRemovedIds.push(tabId);
+      cleanupTabs.delete(tabId);
+    }
+  };
+  const savedCleanupResult = await backgroundSandbox.saveWorkspace('安全清理工作集', {
+    sourceWindowId: 41
+  });
+  assert.ok(savedCleanupResult.cleanupToken);
+  assert.strictEqual(savedCleanupResult.cleanupTabCount, 8);
+  assert.strictEqual(cleanupLocalState['tabgod.sessions'].length, 1);
+  assert.ok(cleanupLocalSets.every((values) => !Object.prototype.hasOwnProperty.call(values, 'tabgod.settings')));
+
+  cleanupTabs.get(405).url = 'https://example.com/already-changed';
+  cleanupTabs.get(406).windowId = 42;
+  cleanupTabs.get(407).pendingUrl = 'https://example.com/loading';
+
+  const savedTabsCloseResult = await backgroundSandbox.closeSavedTabs(savedCleanupResult.cleanupToken);
+  assert.deepStrictEqual({ ...savedTabsCloseResult }, {
+    closedCount: 1,
+    skippedCount: 6,
+    failedCount: 1
+  });
+  assert.deepStrictEqual(cleanupRemovedIds, [402]);
+  assert.strictEqual(cleanupSessionState['tabgod.pendingCleanup'], undefined);
+  await assert.rejects(
+    () => backgroundSandbox.closeSavedTabs(savedCleanupResult.cleanupToken),
+    /待关闭记录已失效/
+  );
 
   let storedSettingsForPriorityMove = {
     priorityGroups: [
@@ -1862,6 +2119,7 @@ async function runAsyncChecks() {
     }
   };
   backgroundSandbox.chrome.tabs = {
+    query: async ({ windowId }) => restoreWindowTabs.filter((tab) => tab.windowId === windowId),
     create: async (options) => {
       const createdTab = Object.assign({ id: 912, title: '普通仓库', index: 1, windowId: 900 }, options);
       restoreOperations.createdTabs.push(createdTab);
@@ -1900,8 +2158,8 @@ async function runAsyncChecks() {
     updated: []
   };
   const duplicateRestoreTabs = [
-    { id: 921, title: '项目首页', url: 'https://a.ldxp.com/home', pinned: false, groupId: 21, index: 0 },
-    { id: 922, title: '项目文档', url: 'https://b.ldxp.com/docs', pinned: false, groupId: 21, index: 1 }
+    { id: 921, title: '项目首页', url: 'https://a.ldxp.com/home', pinned: false, groupId: 21, index: 0, windowId: 910 },
+    { id: 922, title: '项目文档', url: 'https://b.ldxp.com/docs', pinned: false, groupId: 21, index: 1, windowId: 910 }
   ];
   backgroundSandbox.chrome.storage = {
     local: {
@@ -1944,6 +2202,7 @@ async function runAsyncChecks() {
   };
   backgroundSandbox.queryCurrentWindowTabs = async () => duplicateRestoreTabs;
   backgroundSandbox.chrome.tabs = {
+    query: async ({ windowId }) => duplicateRestoreTabs.filter((tab) => tab.windowId === windowId),
     create: async (options) => {
       const createdTab = Object.assign({
         id: 923 + duplicateRestoreOperations.createdTabs.length,
@@ -1967,7 +2226,11 @@ async function runAsyncChecks() {
     }
   };
 
-  await backgroundSandbox.restoreSession('session-duplicate-current-window');
+  const duplicateRestoreResult = await backgroundSandbox.restoreSession('session-duplicate-current-window', {
+    targetWindowId: 910
+  });
+  assert.ok(duplicateRestoreOperations.createdTabs.every((tab) => tab.windowId === 910));
+  assert.strictEqual(duplicateRestoreResult.targetWindowId, 910);
   assert.deepStrictEqual(duplicateRestoreOperations.grouped, [[921, 922, 923, 924]]);
   assert.strictEqual(duplicateRestoreOperations.updated[0].options.title, 'ldxp');
 
@@ -2018,6 +2281,7 @@ async function runAsyncChecks() {
   };
   backgroundSandbox.queryCurrentWindowTabs = async () => pendingRestoreTabs;
   backgroundSandbox.chrome.tabs = {
+    query: async ({ windowId }) => pendingRestoreTabs.filter((tab) => tab.windowId === windowId),
     create: async (options) => {
       const createdTab = Object.assign({
         id: 931 + pendingRestoreOperations.createdUrls.length,
@@ -2039,13 +2303,24 @@ async function runAsyncChecks() {
     update: async () => undefined
   };
 
-  const pendingRestoreResult = await backgroundSandbox.restoreSession('session-pending-url');
+  const pendingRestoreResult = await backgroundSandbox.restoreSession('session-pending-url', {
+    targetWindowId: 930
+  });
   assert.deepStrictEqual(pendingRestoreOperations.createdUrls, [
     'https://a.ldxp.com/home',
     'https://b.ldxp.com/docs'
   ]);
   assert.deepStrictEqual(pendingRestoreOperations.grouped, [[931, 932]]);
   assert.strictEqual(pendingRestoreResult.failedCount, 0);
+
+  backgroundSandbox.chrome.tabGroups.update = async () => {
+    throw new Error('模拟分组标题更新失败');
+  };
+  const partialRestoreResult = await backgroundSandbox.restoreSession('session-pending-url', {
+    targetWindowId: 930
+  });
+  assert.strictEqual(partialRestoreResult.restoredCount, 2);
+  assert.strictEqual(partialRestoreResult.groupingFailed, true);
 
   const storedState = {
     'tabgod.settings': backgroundSandbox.normalizeSettings({

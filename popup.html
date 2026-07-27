@@ -12,11 +12,9 @@
         <div class="popup-title-block">
           <div class="popup-title-row">
             <h1>一键整理</h1>
-            <span class="popup-shortcut-pill" aria-label="打开弹窗快捷键：⌘ Shift L 或 Ctrl Shift L">
+            <span id="openShortcutHint" class="popup-shortcut-pill" aria-label="正在读取打开弹窗快捷键">
               <span>打开</span>
-              <kbd>⌘⇧L</kbd>
-              <span>/</span>
-              <kbd>Ctrl Shift L</kbd>
+              <kbd id="openShortcutText">读取中</kbd>
             </span>
           </div>
           <p id="summaryText">把当前窗口整理成清晰分组</p>
@@ -59,10 +57,8 @@
       <section class="quick-action-area" aria-label="常用操作">
         <button id="organizeButton" class="primary-action main-organize-action" type="button">
           <span class="main-action-label">整理当前窗口</span>
-          <span class="main-action-shortcut" aria-label="默认快捷键：⌘ Shift Y 或 Ctrl Shift Y">
-            <kbd>⌘⇧Y</kbd>
-            <span>/</span>
-            <kbd>Ctrl Shift Y</kbd>
+          <span id="organizeShortcutHint" class="main-action-shortcut" aria-label="正在读取整理快捷键">
+            <kbd id="organizeShortcutText">读取中</kbd>
           </span>
         </button>
         <p id="actionStatusText" class="action-status-text" role="status"></p>
@@ -77,7 +73,7 @@
             </div>
             <span id="duplicateReviewCount">0 个可关闭</span>
           </div>
-          <p id="duplicateReviewHelp" class="helper-text duplicate-review-help">默认保留固定标签、当前标签或最左侧标签。</p>
+          <p id="duplicateReviewHelp" class="helper-text duplicate-review-help">固定、当前、播放声音或正在跳转的标签不会关闭，其余默认保留最左侧标签。</p>
           <p id="duplicateReviewResult" class="duplicate-review-result is-hidden" role="status" hidden></p>
           <div id="duplicateReviewList" class="duplicate-review-list"></div>
           <div class="review-actions">

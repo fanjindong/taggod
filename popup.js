@@ -17,17 +17,20 @@ const state = {
   duplicateReview: {
     // 扫描结果作为确认快照保存，避免用户勾选期间因刷新状态改变待关闭范围。
     visible: false,
+    windowId: null,
     groups: [],
     selectedGroupKeys: [],
     resultMessage: ''
   },
-  // 保存后只记录本次标签编号，用户明确点击后才关闭，避免保存动作变成隐式清场。
-  lastSavedTabIds: [],
+  // 后台保存一次性清理令牌，弹窗只持有令牌摘要，避免直接信任可能过期的标签编号。
+  pendingCleanup: null,
+  currentWindowId: null,
   query: '',
   selectedIndex: 0,
   moreToolsVisible: false,
   recentlyClosedTabsLoaded: false,
   recentlyClosedTabsLoading: false,
+  recentlyClosedTabsVersion: 0,
   managementLoaded: false,
   managementLoading: false,
   // 高级管理默认只展示摘要，用户点开某一项后再显示详情，避免低频操作同时占满弹窗。
@@ -149,8 +152,95 @@ async function loadPopupStateFromBrowser() {
   };
 }
 
+const COMMAND_SHORTCUT_HINTS = [
+  {
+    commandName: '_execute_action',
+    textId: 'openShortcutText',
+    containerId: 'openShortcutHint',
+    actionLabel: '打开弹窗'
+  },
+  {
+    commandName: 'organize-tabs',
+    textId: 'organizeShortcutText',
+    containerId: 'organizeShortcutHint',
+    actionLabel: '整理当前窗口'
+  }
+];
+
+function renderCommandShortcut(commandName, shortcutText) {
+  const hint = COMMAND_SHORTCUT_HINTS.find((item) => item.commandName === commandName);
+
+  if (!hint) {
+    return;
+  }
+
+  const textElement = document.getElementById(hint.textId);
+  const container = document.getElementById(hint.containerId);
+  const displayText = shortcutText || '未设置';
+
+  if (textElement) {
+    textElement.textContent = displayText;
+  }
+
+  if (container) {
+    container.setAttribute('aria-label', `${hint.actionLabel}快捷键：${displayText}`);
+  }
+}
+
+async function loadCommandShortcuts() {
+  if (!chrome.commands || typeof chrome.commands.getAll !== 'function') {
+    COMMAND_SHORTCUT_HINTS.forEach((hint) => renderCommandShortcut(hint.commandName, '读取失败'));
+    return;
+  }
+
+  try {
+    const commands = await chrome.commands.getAll();
+    const shortcutMap = new Map((Array.isArray(commands) ? commands : []).map((command) => [
+      command.name,
+      command.shortcut || ''
+    ]));
+
+    COMMAND_SHORTCUT_HINTS.forEach((hint) => {
+      renderCommandShortcut(hint.commandName, shortcutMap.get(hint.commandName) || '');
+    });
+  } catch (error) {
+    // 快捷键提示是辅助信息，读取失败不能阻塞搜索和整理主流程。
+    COMMAND_SHORTCUT_HINTS.forEach((hint) => renderCommandShortcut(hint.commandName, '读取失败'));
+  }
+}
+
+function resetRecentlyClosedTabsCache() {
+  state.recentlyClosedTabs = [];
+  state.recentlyClosedTabsLoaded = false;
+  state.recentlyClosedTabsVersion += 1;
+}
+
+function invalidateRecentlyClosedTabs() {
+  resetRecentlyClosedTabsCache();
+
+  if (state.query && !state.recentlyClosedTabsLoading) {
+    loadRecentlyClosedTabs();
+    return;
+  }
+
+  renderTabs();
+}
+
+function bindRecentlyClosedSessionEvents() {
+  if (
+    chrome.sessions
+    && chrome.sessions.onChanged
+    && typeof chrome.sessions.onChanged.addListener === 'function'
+  ) {
+    // 浏览器或插件关闭、恢复标签后立即失效缓存，避免搜索继续展示已经过期的会话。
+    chrome.sessions.onChanged.addListener(invalidateRecentlyClosedTabs);
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   bindEvents();
+  bindRecentlyClosedSessionEvents();
+  loadCommandShortcuts();
   loadState();
 });
 
@@ -160,6 +250,7 @@ async function loadState(options = {}) {
   try {
     const data = await loadPopupStateFromBrowser();
     state.tabs = data.tabs || [];
+    state.currentWindowId = Number.isInteger(data.currentWindowId) ? data.currentWindowId : null;
 
     if (!state.managementLoaded) {
       state.groups = data.groups || [];
@@ -224,18 +315,33 @@ async function loadRecentlyClosedTabs() {
   }
 
   state.recentlyClosedTabsLoading = true;
+  const requestVersion = state.recentlyClosedTabsVersion;
 
   try {
     const data = await sendMessage('get-recently-closed-tabs');
+
+    if (requestVersion !== state.recentlyClosedTabsVersion) {
+      return;
+    }
+
     state.recentlyClosedTabs = data.recentlyClosedTabs || [];
     state.recentlyClosedTabsLoaded = true;
     renderTabs();
   } catch (error) {
+    if (requestVersion !== state.recentlyClosedTabsVersion) {
+      return;
+    }
+
     // 最近关闭只是搜索增强，失败时保持已打开标签搜索可用，避免把慢路径变成主路径错误。
     state.recentlyClosedTabs = [];
     state.recentlyClosedTabsLoaded = true;
   } finally {
     state.recentlyClosedTabsLoading = false;
+
+    if (requestVersion !== state.recentlyClosedTabsVersion && state.query) {
+      // 请求期间会话发生变化时重新读取，避免旧请求在最后一刻覆盖刚刚失效的缓存。
+      loadRecentlyClosedTabs();
+    }
   }
 }
 
@@ -254,6 +360,7 @@ async function loadManagementState(options = {}) {
     const data = await sendMessage('get-management-state');
     state.groups = data.groups || [];
     state.sessions = data.sessions || [];
+    state.pendingCleanup = data.pendingCleanup || null;
     state.settings = data.settings || state.settings;
     state.managementLoaded = true;
     renderSettings();
@@ -303,6 +410,7 @@ function bindEvents() {
   document.getElementById('rescanDuplicatesButton').addEventListener('click', scanDuplicates);
   document.getElementById('cancelDuplicateReviewButton').addEventListener('click', () => {
     state.duplicateReview.visible = false;
+    state.duplicateReview.windowId = null;
     state.duplicateReview.groups = [];
     state.duplicateReview.selectedGroupKeys = [];
     state.duplicateReview.resultMessage = '';
@@ -358,6 +466,8 @@ async function runAction(action, payload = {}, options = {}) {
       // 操作后的刷新不能覆盖结果提示，否则用户看不到批量操作到底处理了多少标签。
       await loadState(Object.assign({ keepStatus: true }, options.loadStateOptions || {}));
     }
+
+    return result;
   } catch (error) {
     const message = error.message || '操作失败';
     setStatus(message);
@@ -366,6 +476,8 @@ async function runAction(action, payload = {}, options = {}) {
       setMainActionLabel('整理当前窗口');
       setActionStatus(message, { error: true });
     }
+
+    return null;
   } finally {
     setBusy(false);
   }
@@ -375,8 +487,9 @@ async function scanDuplicates() {
   setBusy(true);
 
   try {
-    const result = await sendMessage('scan-duplicates');
+    const result = await sendMessage('scan-duplicates', { windowId: state.currentWindowId });
     state.duplicateReview.visible = true;
+    state.duplicateReview.windowId = Number.isInteger(result.windowId) ? result.windowId : null;
     state.duplicateReview.groups = result.groups || [];
     state.duplicateReview.selectedGroupKeys = state.duplicateReview.groups.map((group) => group.duplicateKey);
     state.duplicateReview.resultMessage = '';
@@ -406,10 +519,9 @@ async function closeSelectedDuplicates() {
   const selectedGroups = state.duplicateReview.groups.filter((group) => {
     return state.duplicateReview.selectedGroupKeys.includes(group.duplicateKey);
   });
-  // 只关闭后台判定为可关闭的副本，保留标签由后台规则统一决定，前台不重复推断。
-  const tabIds = selectedGroups.flatMap((group) => group.closeTabIds);
+  const selectedCloseCount = selectedGroups.reduce((total, group) => total + group.closeCount, 0);
 
-  if (tabIds.length === 0) {
+  if (selectedCloseCount === 0 || !Number.isInteger(state.duplicateReview.windowId)) {
     setStatus('没有勾选要关闭的重复标签');
     return;
   }
@@ -417,15 +529,25 @@ async function closeSelectedDuplicates() {
   setBusy(true);
 
   try {
-    const result = await sendMessage('close-selected-duplicates', { tabIds });
+    const result = await sendMessage('close-selected-duplicates', {
+      windowId: state.duplicateReview.windowId,
+      // 同时提交扫描时的重复组和候选编号，后台只会关闭原确认快照与当前状态的交集。
+      groups: selectedGroups.map((group) => ({
+        duplicateKey: group.duplicateKey,
+        closeTabIds: group.closeTabIds
+      }))
+    });
+    const skippedCount = result.skippedCount || 0;
     const failedCount = result.failedCount || 0;
-    const resultMessage = `已关闭 ${result.closedCount} 个重复标签，失败 ${failedCount} 个`;
+    const resultMessage = `已关闭 ${result.closedCount} 个重复标签，安全跳过 ${skippedCount} 个，失败 ${failedCount} 个`;
     state.duplicateReview.visible = true;
+    state.duplicateReview.windowId = null;
     state.duplicateReview.groups = [];
     state.duplicateReview.selectedGroupKeys = [];
     state.duplicateReview.resultMessage = resultMessage;
     setStatus(resultMessage);
     setActionStatus(resultMessage, { success: failedCount === 0, error: failedCount > 0 });
+    invalidateRecentlyClosedTabs();
     await loadState({ keepStatus: true, keepDuplicateReviewFocus: true });
   } catch (error) {
     setStatus(error.message || '关闭重复标签失败');
@@ -447,7 +569,11 @@ async function openSearchResult(result) {
       return;
     }
 
-    await runAction('restore-closed-session', { sessionId: result.sessionId });
+    const restoreResult = await runAction('restore-closed-session', { sessionId: result.sessionId });
+
+    if (restoreResult) {
+      invalidateRecentlyClosedTabs();
+    }
     return;
   }
 
@@ -705,7 +831,7 @@ function toggleManagementPanel(panelName) {
 function renderManagementOverview() {
   const rules = state.settings.groupRules || [];
   const starredGroupCount = state.groups.filter((group) => group.starred).length;
-  const savedTabCount = state.lastSavedTabIds.length;
+  const savedTabCount = state.pendingCleanup ? state.pendingCleanup.tabCount : 0;
   const summaries = [
     {
       key: 'rules',
@@ -828,12 +954,21 @@ async function saveWorkspace() {
   setBusy(true);
 
   try {
-    const result = await sendMessage('save-workspace', { name: trimmedName });
-    state.lastSavedTabIds = result.savedTabIds || [];
+    const result = await sendMessage('save-workspace', {
+      name: trimmedName,
+      sourceWindowId: state.currentWindowId
+    });
+    state.pendingCleanup = result.cleanupToken ? {
+      token: result.cleanupToken,
+      tabCount: result.cleanupTabCount || 0
+    } : null;
     state.moreToolsVisible = true;
     state.activeManagementPanel = 'cleanup';
-    setStatus(`已保存 ${result.savedCount} 个标签，可选择关闭已保存标签`);
-    setActionStatus(`已保存 ${result.savedCount} 个标签，可在高级管理中关闭已保存标签`, { success: true });
+    const cleanupHint = state.pendingCleanup
+      ? '，可选择安全关闭仍未变化的标签'
+      : '，但当前无法提供自动关闭入口';
+    setStatus(`已保存 ${result.savedCount} 个标签${cleanupHint}`);
+    setActionStatus(`已保存 ${result.savedCount} 个标签${cleanupHint}`, { success: true });
     await loadState({ keepStatus: true, keepMoreToolsFocus: true });
   } catch (error) {
     setStatus(error.message || '保存工作集失败');
@@ -844,7 +979,7 @@ async function saveWorkspace() {
 }
 
 async function closeLastSavedTabs() {
-  if (state.lastSavedTabIds.length === 0) {
+  if (!state.pendingCleanup || !state.pendingCleanup.token) {
     setStatus('没有可关闭的已保存标签');
     return;
   }
@@ -852,11 +987,17 @@ async function closeLastSavedTabs() {
   setBusy(true);
 
   try {
-    const result = await sendMessage('close-saved-tabs', { tabIds: state.lastSavedTabIds });
-    state.lastSavedTabIds = [];
-    setStatus(`已关闭 ${result.closedCount} 个已保存标签，失败 ${result.failedCount || 0} 个`);
+    const result = await sendMessage('close-saved-tabs', { cleanupToken: state.pendingCleanup.token });
+    state.pendingCleanup = null;
+    const resultMessage = `已关闭 ${result.closedCount} 个已保存标签，安全跳过 ${result.skippedCount || 0} 个，失败 ${result.failedCount || 0} 个`;
+    setStatus(resultMessage);
+    invalidateRecentlyClosedTabs();
     await loadState({ keepStatus: true, keepMoreToolsFocus: true });
   } catch (error) {
+    // 一次性令牌在后台开始处理时已经消费，失败后不能继续展示可重复点击的旧入口。
+    state.pendingCleanup = null;
+    renderSavedCleanup();
+    renderManagementOverview();
     setStatus(error.message || '关闭已保存标签失败');
   } finally {
     setBusy(false);
@@ -1618,12 +1759,16 @@ function renderTabs() {
     item.dataset.tabId = String(tab.id);
     const groupLabel = getSearchResultGroupLabel(tab);
     const isRecentlyClosed = tab.resultType === 'recentlyClosed';
-    const windowLabel = isRecentlyClosed ? '最近关闭' : (tab.windowLabel || (tab.isCurrentWindow ? '当前窗口' : '其他窗口'));
+    const windowLabel = tab.windowLabel || (tab.isCurrentWindow ? '当前窗口' : '其他窗口');
     const accessLabel = formatRecentAccessTime(Number(tab.lastAccessedAt) || 0);
     const metaText = accessLabel ? `${windowLabel} · ${accessLabel}` : windowLabel;
     const openButton = document.createElement('button');
     openButton.className = 'quick-result-open-button';
     openButton.type = 'button';
+
+    if (isRecentlyClosed && tab.restoreScope === 'window') {
+      openButton.title = '恢复整个最近关闭窗口';
+    }
     openButton.innerHTML = `
       <span class="quick-result-main">
         <span class="tab-title" title="${escapeHtml(tab.title)}">${escapeHtml(tab.title)}</span>
@@ -1723,7 +1868,7 @@ function renderSavedCleanup() {
 
   cleanupAction.innerHTML = '';
 
-  if (state.lastSavedTabIds.length === 0) {
+  if (!state.pendingCleanup || !state.pendingCleanup.token || state.pendingCleanup.tabCount === 0) {
     cleanupAction.appendChild(createEmptyState('没有待关闭的已保存标签', '保存工作集后，可以在这里关闭本次已保存的标签。'));
     return;
   }
@@ -1731,14 +1876,17 @@ function renderSavedCleanup() {
   const closeSavedButton = document.createElement('button');
   closeSavedButton.className = 'close-saved-button danger-button';
   closeSavedButton.type = 'button';
-  closeSavedButton.textContent = `关闭 ${state.lastSavedTabIds.length} 个已保存标签`;
+  closeSavedButton.textContent = `检查并关闭 ${state.pendingCleanup.tabCount} 个已保存标签`;
   closeSavedButton.addEventListener('click', closeLastSavedTabs);
   cleanupAction.appendChild(closeSavedButton);
 }
 
 async function handleWorkspaceAction(action, sessionId) {
   if (action === 'restore') {
-    await runAction('restore-workspace', { workspaceId: sessionId }, {
+    await runAction('restore-workspace', {
+      workspaceId: sessionId,
+      targetWindowId: state.currentWindowId
+    }, {
       loadStateOptions: { keepMoreToolsFocus: true }
     });
     return;
@@ -2193,16 +2341,23 @@ function formatActionResult(action, result) {
     return `已整理 ${result.organizedCount} 个标签，创建 ${result.groupCount} 个分组`;
   }
 
-  if (action === 'close-duplicates') {
-    return `已关闭 ${result.closedCount} 个重复标签`;
-  }
-
   if (action === 'save-session' || action === 'save-workspace') {
     return `已保存 ${result.savedCount} 个标签`;
   }
 
   if (action === 'restore-session' || action === 'restore-workspace' || action === 'restore-workspace-new-window') {
-    return `已恢复 ${result.restoredCount} 个标签，跳过 ${result.failedCount} 个无法恢复的页面`;
+    const warnings = [];
+
+    if (result.groupingFailed) {
+      warnings.push('分组未完全恢复');
+    }
+
+    if (result.activationFailed) {
+      warnings.push('未能自动切换到目标页面');
+    }
+
+    const warningText = warnings.length > 0 ? `，${warnings.join('，')}` : '';
+    return `已恢复 ${result.restoredCount} 个标签，跳过 ${result.failedCount} 个无法恢复的页面${warningText}`;
   }
 
   if (action === 'rename-workspace') {

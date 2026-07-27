@@ -26,6 +26,7 @@ const state = {
   pendingCleanup: null,
   currentWindowId: null,
   query: '',
+  visibleTabs: [],
   selectedIndex: 0,
   moreToolsVisible: false,
   recentlyClosedTabsLoaded: false,
@@ -220,7 +221,6 @@ function invalidateRecentlyClosedTabs() {
 
   if (state.query && !state.recentlyClosedTabsLoading) {
     loadRecentlyClosedTabs();
-    return;
   }
 
   renderTabs();
@@ -259,7 +259,6 @@ async function loadState(options = {}) {
 
     state.settings = data.settings || state.settings;
     state.overview = data.overview || state.overview;
-    state.selectedIndex = clampSelectedIndex(state.selectedIndex, getVisibleTabsFromState(state).length);
     render();
 
     if (options.keepMoreToolsFocus) {
@@ -316,6 +315,7 @@ async function loadRecentlyClosedTabs() {
 
   state.recentlyClosedTabsLoading = true;
   const requestVersion = state.recentlyClosedTabsVersion;
+  let shouldRender = false;
 
   try {
     const data = await sendMessage('get-recently-closed-tabs');
@@ -326,7 +326,7 @@ async function loadRecentlyClosedTabs() {
 
     state.recentlyClosedTabs = data.recentlyClosedTabs || [];
     state.recentlyClosedTabsLoaded = true;
-    renderTabs();
+    shouldRender = true;
   } catch (error) {
     if (requestVersion !== state.recentlyClosedTabsVersion) {
       return;
@@ -335,8 +335,13 @@ async function loadRecentlyClosedTabs() {
     // 最近关闭只是搜索增强，失败时保持已打开标签搜索可用，避免把慢路径变成主路径错误。
     state.recentlyClosedTabs = [];
     state.recentlyClosedTabsLoaded = true;
+    shouldRender = true;
   } finally {
     state.recentlyClosedTabsLoading = false;
+
+    if (shouldRender) {
+      renderTabs();
+    }
 
     if (requestVersion !== state.recentlyClosedTabsVersion && state.query) {
       // 请求期间会话发生变化时重新读取，避免旧请求在最后一刻覆盖刚刚失效的缓存。
@@ -624,27 +629,17 @@ function getSearchResultGroupLabel(tab) {
 }
 
 function handleSearchResultNavigationKeydown(event, options = {}) {
-  const visibleTabs = getVisibleTabs();
+  const visibleTabs = state.visibleTabs;
 
   if (event.key === 'ArrowDown') {
     event.preventDefault();
-    state.selectedIndex = clampSelectedIndex(state.selectedIndex + 1, visibleTabs.length);
-    renderTabs();
-    if (options.restoreFocusAfterRender) {
-      // 列表内按钮触发方向键时会重建当前聚焦节点，需要把焦点补回新选中项。
-      focusSelectedSearchResult();
-    }
+    selectSearchResult(state.selectedIndex + 1, options.focusSelectedResult);
     return true;
   }
 
   if (event.key === 'ArrowUp') {
     event.preventDefault();
-    state.selectedIndex = clampSelectedIndex(state.selectedIndex - 1, visibleTabs.length);
-    renderTabs();
-    if (options.restoreFocusAfterRender) {
-      // 搜索框方向键仍保留原焦点，只在结果列表上下文里恢复焦点。
-      focusSelectedSearchResult();
-    }
+    selectSearchResult(state.selectedIndex - 1, options.focusSelectedResult);
     return true;
   }
 
@@ -683,7 +678,42 @@ function handleSearchResultListKeydown(event) {
   }
 
   syncSelectedIndexFromSearchResultFocus(event);
-  return handleSearchResultNavigationKeydown(event, { restoreFocusAfterRender: true });
+  return handleSearchResultNavigationKeydown(event, { focusSelectedResult: true });
+}
+
+function selectSearchResult(index, shouldFocus) {
+  const tabList = document.getElementById('searchResultList');
+  const items = tabList ? tabList.querySelectorAll('.quick-result-item') : [];
+  const selectedIndex = clampSelectedIndex(index, state.visibleTabs.length);
+
+  if (items.length !== state.visibleTabs.length) {
+    state.selectedIndex = selectedIndex;
+    renderTabs();
+    if (shouldFocus) {
+      focusSelectedSearchResult();
+    }
+    return;
+  }
+
+  const previousItem = items[state.selectedIndex];
+  const selectedItem = items[selectedIndex];
+
+  if (previousItem) {
+    previousItem.classList.remove('is-selected');
+  }
+
+  state.selectedIndex = selectedIndex;
+
+  if (selectedItem) {
+    selectedItem.classList.add('is-selected');
+    if (typeof selectedItem.scrollIntoView === 'function') {
+      selectedItem.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  if (shouldFocus) {
+    focusSelectedSearchResult();
+  }
 }
 
 function getSearchResultIndexFromElement(element) {
@@ -708,11 +738,9 @@ function syncSelectedIndexFromSearchResultElement(element) {
     return null;
   }
 
-  const visibleTabs = getVisibleTabs();
-
   // 焦点可能通过 Tab 直接进入列表里的按钮，这里同步选中项，确保回车打开的始终是当前焦点项。
-  state.selectedIndex = clampSelectedIndex(focusedIndex, visibleTabs.length);
-  return visibleTabs[state.selectedIndex] || null;
+  state.selectedIndex = clampSelectedIndex(focusedIndex, state.visibleTabs.length);
+  return state.visibleTabs[state.selectedIndex] || null;
 }
 
 function syncSelectedIndexFromSearchResultFocus(event) {
@@ -753,7 +781,8 @@ async function closeSearchResultTab(tab, event) {
     const displayName = result.title || getSearchResultDisplayName(tab);
 
     state.tabs = state.tabs.filter((item) => item.id !== closedTabId);
-    state.selectedIndex = clampSelectedIndexAfterClose(state.selectedIndex, getVisibleTabsFromState(state).length);
+    const remainingVisibleCount = state.visibleTabs.filter((item) => item.id !== closedTabId).length;
+    state.selectedIndex = clampSelectedIndexAfterClose(state.selectedIndex, remainingVisibleCount);
     renderTabs();
     setStatus(`已关闭：${displayName}`);
     focusSelectedSearchResult();
@@ -1731,6 +1760,7 @@ function getSelectedDuplicateCloseCount() {
 function renderTabs() {
   const tabList = document.getElementById('searchResultList');
   const visibleTabs = getVisibleTabs();
+  state.visibleTabs = visibleTabs;
   const selectedIndex = clampSelectedIndex(state.selectedIndex, visibleTabs.length);
   state.selectedIndex = selectedIndex;
   document.getElementById('visibleCount').textContent = `${visibleTabs.length} 个结果`;
@@ -2163,10 +2193,6 @@ function getRecentMatchScore(tab, now = Date.now()) {
   return 0;
 }
 
-function getSearchRankingScore(tab, query, now = Date.now()) {
-  return getSearchMatchScore(tab, query) + getRecentMatchScore(tab, now);
-}
-
 function compareRecentTabs(left, right) {
   const leftAccessedAt = Number(left.lastAccessedAt) || 0;
   const rightAccessedAt = Number(right.lastAccessedAt) || 0;
@@ -2182,10 +2208,11 @@ function compareRecentTabs(left, right) {
   return (left.index || 0) - (right.index || 0);
 }
 
-function compareSearchTabs(left, right, query) {
-  const now = Date.now();
-  const leftScore = getSearchRankingScore(left, query, now);
-  const rightScore = getSearchRankingScore(right, query, now);
+function compareSearchTabs(leftRecord, rightRecord) {
+  const left = leftRecord.tab;
+  const right = rightRecord.tab;
+  const leftScore = leftRecord.rankingScore;
+  const rightScore = rightRecord.rankingScore;
   const leftType = left.resultType || 'open';
   const rightType = right.resultType || 'open';
 
@@ -2226,10 +2253,22 @@ function getVisibleTabsFromState(sourceState) {
     ...recentlyClosedTabs
   ];
 
+  const now = Date.now();
+
   return searchPool
-    .filter((tab) => getSearchMatchScore(tab, query) > 0 || getTabSearchText(tab).includes(query))
-    .sort((left, right) => compareSearchTabs(left, right, query))
-    .slice(0, SEARCH_RESULT_LIMIT);
+    .map((tab) => {
+      const matchScore = getSearchMatchScore(tab, query);
+
+      return {
+        tab,
+        matchScore,
+        rankingScore: matchScore + getRecentMatchScore(tab, now)
+      };
+    })
+    .filter((record) => record.matchScore > 0 || getTabSearchText(record.tab).includes(query))
+    .sort(compareSearchTabs)
+    .slice(0, SEARCH_RESULT_LIMIT)
+    .map((record) => record.tab);
 }
 
 function clampSelectedIndex(index, total) {

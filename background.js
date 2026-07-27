@@ -337,6 +337,14 @@ function buildOrganizedTabsFromNormalizedSettings(tabs, normalizedSettings) {
     normalizedSettings,
     resolvedGroupInfoMap
   );
+  const hostnameMap = new Map();
+  const getCachedHostname = (tab) => {
+    if (!hostnameMap.has(tab)) {
+      hostnameMap.set(tab, getHostnameKey(tab.url || ''));
+    }
+
+    return hostnameMap.get(tab);
+  };
 
   return [...safeTabs].sort((left, right) => {
     if (left.pinned !== right.pinned) {
@@ -355,8 +363,8 @@ function buildOrganizedTabsFromNormalizedSettings(tabs, normalizedSettings) {
       return leftIsGroupable ? -1 : 1;
     }
 
-    const leftIsPriority = leftIsGroupable && isPriorityGroup(normalizedSettings, leftDomain);
-    const rightIsPriority = rightIsGroupable && isPriorityGroup(normalizedSettings, rightDomain);
+    const leftIsPriority = leftIsGroupable && priorityGroupOrderMap.has(leftDomain);
+    const rightIsPriority = rightIsGroupable && priorityGroupOrderMap.has(rightDomain);
 
     if (leftIsPriority !== rightIsPriority) {
       return leftIsPriority ? -1 : 1;
@@ -386,8 +394,8 @@ function buildOrganizedTabsFromNormalizedSettings(tabs, normalizedSettings) {
       return domainCompare;
     }
 
-    const leftHostname = getHostnameKey(left.url || '');
-    const rightHostname = getHostnameKey(right.url || '');
+    const leftHostname = getCachedHostname(left);
+    const rightHostname = getCachedHostname(right);
     const hostnameCompare = leftHostname.localeCompare(rightHostname, 'zh-CN');
 
     return hostnameCompare === 0 ? left.index - right.index : hostnameCompare;
@@ -408,10 +416,6 @@ async function queryWindowTabs(windowId) {
   }
 
   return chrome.tabs.query({ windowId });
-}
-
-async function queryAllWindowTabs() {
-  return chrome.tabs.query({});
 }
 
 function getWindowIdFromTabs(tabs) {
@@ -735,6 +739,7 @@ async function organizeTabs() {
 async function reconcileWindowGroupsFromTabs(tabs, normalizedSettings) {
   const groups = new Map();
   const groupInfos = [];
+  const nativeGroupKeys = new Map();
 
   tabs.forEach((tab) => {
     if (tab.pinned || typeof tab.id !== 'number') {
@@ -747,9 +752,16 @@ async function reconcileWindowGroupsFromTabs(tabs, normalizedSettings) {
     const groupTabs = groups.get(groupKey) || [];
     groupTabs.push(tab);
     groups.set(groupKey, groupTabs);
+
+    if (typeof tab.groupId === 'number' && tab.groupId >= 0) {
+      const groupKeys = nativeGroupKeys.get(tab.groupId) || new Set();
+      groupKeys.add(groupKey);
+      nativeGroupKeys.set(tab.groupId, groupKeys);
+    }
   });
 
-  let groupedCount = 0;
+  let groupIndex = 0;
+  let createdGroupCount = 0;
   let ungroupedTabCount = 0;
   const titleMap = buildResolvedGroupTitleMapFromGroupInfos(groupInfos, normalizedSettings);
 
@@ -772,19 +784,30 @@ async function reconcileWindowGroupsFromTabs(tabs, normalizedSettings) {
       continue;
     }
 
-    const groupId = await chrome.tabs.group({ tabIds }).catch(() => null);
+    const existingGroupId = groupTabs[0].groupId;
+    const canReuseGroup = typeof existingGroupId === 'number'
+      && existingGroupId >= 0
+      && groupTabs.every((tab) => tab.groupId === existingGroupId)
+      && nativeGroupKeys.get(existingGroupId).size === 1;
+    const groupId = canReuseGroup
+      ? existingGroupId
+      : await chrome.tabs.group({ tabIds }).catch(() => null);
 
     if (typeof groupId === 'number') {
       await chrome.tabGroups.update(groupId, {
         title: titleMap.get(groupKey) || groupKey,
-        color: getGroupColor(groupedCount)
+        color: getGroupColor(groupIndex)
       });
-      groupedCount += 1;
+      groupIndex += 1;
+
+      if (!canReuseGroup) {
+        createdGroupCount += 1;
+      }
     }
   }
 
   return {
-    groupedCount,
+    groupedCount: createdGroupCount,
     ungroupedTabCount
   };
 }
@@ -920,30 +943,6 @@ function normalizeSelectedDuplicateTargets(selectedGroups) {
   return Array.from(targetMap.values());
 }
 
-async function getRevalidatedDuplicateTab(windowId, target) {
-  const currentTabs = await queryWindowTabs(windowId);
-  const currentGroup = buildDuplicateGroups(currentTabs).find((group) => {
-    return group.duplicateKey === target.duplicateKey;
-  });
-
-  if (!currentGroup || !currentGroup.closeTabIds.includes(target.tabId)) {
-    return null;
-  }
-
-  const currentTab = currentTabs.find((tab) => tab.id === target.tabId);
-
-  if (
-    !currentTab
-    || currentTab.windowId !== windowId
-    || isBulkCloseProtectedTab(currentTab)
-    || normalizeUrlForDuplicate(currentTab.url) !== target.duplicateKey
-  ) {
-    return null;
-  }
-
-  return currentTab;
-}
-
 async function closeSelectedDuplicateTabs(windowId, selectedGroups) {
   if (!Number.isInteger(windowId)) {
     throw new Error('重复标签所在窗口无效，请重新扫描');
@@ -959,30 +958,68 @@ async function closeSelectedDuplicateTabs(windowId, selectedGroups) {
     };
   }
 
+  const currentTabs = await queryWindowTabs(windowId);
+  const currentGroupMap = new Map(buildDuplicateGroups(currentTabs).map((group) => [
+    group.duplicateKey,
+    group
+  ]));
+  const candidateGroups = new Map();
   let closedCount = 0;
   let skippedCount = 0;
   let failedCount = 0;
 
   for (const target of targets) {
-    let currentTab;
+    const currentGroup = currentGroupMap.get(target.duplicateKey);
 
-    try {
-      // 每个标签关闭前都重新计算重复组，避免确认后页面跳转或保留项变化造成误关。
-      currentTab = await getRevalidatedDuplicateTab(windowId, target);
-    } catch (error) {
-      currentTab = null;
-    }
-
-    if (!currentTab) {
+    if (!currentGroup || !currentGroup.closeTabIds.includes(target.tabId)) {
       skippedCount += 1;
       continue;
     }
 
-    try {
-      await chrome.tabs.remove(currentTab.id);
-      closedCount += 1;
-    } catch (error) {
-      failedCount += 1;
+    const candidates = candidateGroups.get(target.duplicateKey) || {
+      group: currentGroup,
+      targets: []
+    };
+    candidates.targets.push(target);
+    candidateGroups.set(target.duplicateKey, candidates);
+  }
+
+  for (const { group, targets: groupTargets } of candidateGroups.values()) {
+    for (let index = 0; index < groupTargets.length; index += 1) {
+      const target = groupTargets[index];
+      const [keepResult, targetResult] = await Promise.allSettled([
+        chrome.tabs.get(group.keepTabId),
+        chrome.tabs.get(target.tabId)
+      ]);
+      const keepTab = keepResult.status === 'fulfilled' ? keepResult.value : null;
+      const currentTab = targetResult.status === 'fulfilled' ? targetResult.value : null;
+
+      if (
+        !keepTab
+        || keepTab.windowId !== windowId
+        || keepTab.pendingUrl
+        || normalizeUrlForDuplicate(keepTab.url) !== target.duplicateKey
+      ) {
+        skippedCount += groupTargets.length - index;
+        break;
+      }
+
+      if (
+        !currentTab
+        || currentTab.windowId !== windowId
+        || isBulkCloseProtectedTab(currentTab)
+        || normalizeUrlForDuplicate(currentTab.url) !== target.duplicateKey
+      ) {
+        skippedCount += 1;
+        continue;
+      }
+
+      try {
+        await chrome.tabs.remove(currentTab.id);
+        closedCount += 1;
+      } catch (error) {
+        failedCount += 1;
+      }
     }
   }
 
@@ -1854,46 +1891,6 @@ async function restoreSession(sessionId, options = {}) {
     activationFailed,
     targetWindowId
   };
-}
-
-async function regroupRestoredTabs(tabs, settings = DEFAULT_SETTINGS) {
-  const normalizedSettings = normalizeSettings(settings);
-  const groups = new Map();
-  const groupInfos = [];
-
-  tabs.forEach((tab) => {
-    if (tab.pinned || typeof tab.id !== 'number') {
-      return;
-    }
-
-    const groupInfo = getResolvedGroupInfoFromNormalizedSettings(tab, normalizedSettings);
-    const groupKey = groupInfo.groupKey;
-    groupInfos.push(groupInfo);
-    const groupTabs = groups.get(groupKey) || [];
-    groupTabs.push(tab);
-    groups.set(groupKey, groupTabs);
-  });
-
-  let groupIndex = 0;
-  const titleMap = buildResolvedGroupTitleMapFromGroupInfos(groupInfos, normalizedSettings);
-
-  for (const [groupKey, groupTabs] of groups.entries()) {
-    if (!shouldCreateNativeGroupForTabsFromNormalizedSettings(groupTabs, normalizedSettings, groupKey)) {
-      // 恢复工作集时沿用用户阈值，避免恢复后出现用户刚刚选择隐藏的低数量分组。
-      continue;
-    }
-
-    const tabIds = groupTabs.map((tab) => tab.id);
-    const groupId = await chrome.tabs.group({ tabIds }).catch(() => null);
-
-    if (typeof groupId === 'number') {
-      await chrome.tabGroups.update(groupId, {
-        title: titleMap.get(groupKey) || groupKey,
-        color: getGroupColor(groupIndex)
-      });
-      groupIndex += 1;
-    }
-  }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

@@ -107,6 +107,10 @@ assert.ok(!popupStructureJsContent.includes("const item = document.createElement
 assert.ok(popupStructureCssContent.includes('.quick-result-open-button'));
 assert.ok(popupStructureCssContent.includes('.quick-result-action-slot'));
 assert.ok(popupStructureCssContent.includes('grid-template-columns: minmax(0, 1fr) 40px;'));
+assert.ok(!popupStructureCssContent.includes('.stats-grid'));
+assert.ok(!popupStructureCssContent.includes('.stat-item'));
+assert.ok(!popupStructureCssContent.includes('.icon-help-button'));
+assert.ok(!popupStructureCssContent.includes('.management-section-label'));
 assert.ok(popupStructureJsContent.includes('function canCloseSearchResultTab'));
 assert.ok(popupStructureJsContent.includes('function getSearchResultDisplayName'));
 assert.ok(popupStructureJsContent.includes('function getSearchResultGroupLabel'));
@@ -117,16 +121,16 @@ assert.ok(popupStructureJsContent.includes('function syncSelectedIndexFromSearch
 assert.ok(popupStructureJsContent.includes('function syncSelectedIndexFromSearchResultElement'));
 assert.ok(popupStructureJsContent.includes('function clampSelectedIndexAfterClose'));
 assert.ok(popupStructureJsContent.includes("closest('.quick-result-item')"));
-assert.ok(popupStructureJsContent.includes('state.selectedIndex = clampSelectedIndex(focusedIndex, visibleTabs.length);'));
-assert.ok(popupStructureJsContent.includes('state.selectedIndex = clampSelectedIndexAfterClose(state.selectedIndex, getVisibleTabsFromState(state).length);'));
+assert.ok(popupStructureJsContent.includes('state.selectedIndex = clampSelectedIndex(focusedIndex, state.visibleTabs.length);'));
+assert.ok(popupStructureJsContent.includes('state.selectedIndex = clampSelectedIndexAfterClose(state.selectedIndex, remainingVisibleCount);'));
 assert.ok(popupStructureJsContent.includes('return total - 1;'));
 assert.ok(popupStructureJsContent.includes('function handleSearchResultNavigationKeydown'));
 assert.ok(popupStructureJsContent.includes('function handleSearchResultListKeydown'));
 assert.ok(popupStructureJsContent.includes("document.getElementById('searchResultList').addEventListener('keydown', handleSearchResultListKeydown)"));
 assert.ok(!popupStructureJsContent.includes("openButton.addEventListener('keydown', handleSearchResultListKeydown)"));
 assert.ok(popupStructureJsContent.includes('handleSearchResultNavigationKeydown(event)'));
-assert.ok(popupStructureJsContent.includes('restoreFocusAfterRender'));
-assert.ok(popupStructureJsContent.includes('handleSearchResultNavigationKeydown(event, { restoreFocusAfterRender: true })'));
+assert.ok(popupStructureJsContent.includes('function selectSearchResult'));
+assert.ok(popupStructureJsContent.includes('handleSearchResultNavigationKeydown(event, { focusSelectedResult: true })'));
 assert.ok(popupStructureJsContent.includes('focusSelectedSearchResult();'));
 assert.ok(popupStructureJsContent.includes("if (event.key === 'Enter')"));
 assert.ok(popupStructureJsContent.includes("syncSelectedIndexFromSearchResultElement(closeButton);"));
@@ -148,6 +152,11 @@ assert.ok(batchSnapshotFunctionSource.includes('buildResolvedGroupTitleMapFromGr
 assert.ok(!batchSnapshotFunctionSource.includes('buildResolvedGroupTitleMapFromNormalizedSettings'));
 assert.ok(!backgroundStructureJsContent.includes("if (action === 'get-search-state')"));
 assert.ok(!popupStructureJsContent.includes("sendMessage('get-search-state')"));
+assert.ok(!backgroundStructureJsContent.includes('function queryAllWindowTabs'));
+assert.ok(!backgroundStructureJsContent.includes('function regroupRestoredTabs'));
+assert.ok(!backgroundStructureJsContent.includes('function getRevalidatedDuplicateTab'));
+assert.ok(!groupingStructureJsContent.includes('organizeWithGroups'));
+assert.ok(!groupingStructureJsContent.includes('duplicateKeepStrategy'));
 assert.ok(popupStructureJsContent.includes('event.stopPropagation()'));
 assert.ok(popupStructureJsContent.includes('quick-result-close-button'));
 assert.ok(popupStructureJsContent.includes('item.appendChild(openButton)'));
@@ -247,6 +256,7 @@ vm.runInContext(groupingContent, backgroundSandbox, { filename: 'grouping.js' })
 const backgroundGroupingApi = backgroundSandbox.TabGodGrouping;
 let backgroundNormalizeSettingsCallCount = 0;
 let backgroundResolvedGroupInfoCallCount = 0;
+let backgroundHostnameKeyCalls = new Map();
 // 为验证批量性能，只包装后台实际导入的共享入口，不改变测试直接调用的原始接口和业务结果。
 backgroundSandbox.TabGodGrouping = Object.freeze(Object.assign({}, backgroundGroupingApi, {
   normalizeSettings(settings) {
@@ -256,6 +266,10 @@ backgroundSandbox.TabGodGrouping = Object.freeze(Object.assign({}, backgroundGro
   getResolvedGroupInfoFromNormalizedSettings(tab, normalizedSettings) {
     backgroundResolvedGroupInfoCallCount += 1;
     return backgroundGroupingApi.getResolvedGroupInfoFromNormalizedSettings(tab, normalizedSettings);
+  },
+  getHostnameKey(url) {
+    backgroundHostnameKeyCalls.set(url, (backgroundHostnameKeyCalls.get(url) || 0) + 1);
+    return backgroundGroupingApi.getHostnameKey(url);
   }
 }));
 // 校验脚本继续通过沙箱属性访问纯函数，避免测试依赖后台脚本内部的词法声明方式。
@@ -1136,6 +1150,7 @@ const customAndDomainGroupedOrderTabs = backgroundSandbox.buildOrganizedTabs([
 }));
 assert.deepStrictEqual(Array.from(customAndDomainGroupedOrderTabs, (tab) => tab.id).slice(0, 2), [481, 483]);
 
+backgroundHostnameKeyCalls = new Map();
 const customHostnameSortedTabs = backgroundSandbox.buildOrganizedTabs([
   { id: 491, title: '乙', url: 'https://b.example.com/a', active: false, pinned: false, index: 0 },
   { id: 492, title: '甲', url: 'https://a.example.com/a', active: false, pinned: false, index: 1 }
@@ -1157,6 +1172,15 @@ const customHostnameSortedTabs = backgroundSandbox.buildOrganizedTabs([
   ]
 }));
 assert.deepStrictEqual(Array.from(customHostnameSortedTabs, (tab) => tab.id), [492, 491]);
+assert.strictEqual(backgroundHostnameKeyCalls.size, 2);
+assert.ok(Array.from(backgroundHostnameKeyCalls.values()).every((count) => count === 1));
+
+backgroundHostnameKeyCalls = new Map();
+backgroundSandbox.buildOrganizedTabs([
+  { id: 493, title: '甲', url: 'https://alpha.example.com/a', active: false, pinned: false, index: 0 },
+  { id: 494, title: '乙', url: 'https://beta.example.org/b', active: false, pinned: false, index: 1 }
+], backgroundSandbox.normalizeSettings({ minTabsPerGroup: 2, priorityGroups: [], groupRules: [] }));
+assert.strictEqual(backgroundHostnameKeyCalls.size, 0);
 
 const samePrimaryDomainUrls = [
   'https://mail.google.com/inbox',
@@ -1271,6 +1295,9 @@ function createPopupTestElement() {
     appendChild() {},
     querySelectorAll() {
       return [];
+    },
+    querySelector() {
+      return null;
     },
     setAttribute(name, value) {
       this.attributes[name] = String(value);
@@ -1457,6 +1484,75 @@ async function assertPopupUnifiedSearchStateContract() {
   popupSandbox.resetRecentlyClosedTabsCache();
   assert.strictEqual(vm.runInContext('state.recentlyClosedTabs.length', popupSandbox), 0);
   assert.strictEqual(vm.runInContext('state.recentlyClosedTabsLoaded', popupSandbox), false);
+
+  const originalPopupSendMessage = popupSandbox.chrome.runtime.sendMessage;
+  const recentlyClosedRequests = [];
+  popupSandbox.chrome.runtime.sendMessage = () => new Promise((resolve) => {
+    recentlyClosedRequests.push(resolve);
+  });
+  vm.runInContext(`
+    state.query = 'github';
+    state.tabs = [];
+    state.recentlyClosedTabs = [{
+      id: 'closed-old',
+      title: 'GitHub 旧关闭页面',
+      url: 'https://github.com/acme/old',
+      groupKey: 'github.com',
+      groupTitle: 'github',
+      resultType: 'recentlyClosed'
+    }];
+    state.recentlyClosedTabsLoaded = false;
+    state.recentlyClosedTabsLoading = false;
+    globalThis.recentlyClosedRenderLoadingStates = [];
+    globalThis.originalRecentlyClosedRenderTabs = renderTabs;
+    renderTabs = function () {
+      recentlyClosedRenderLoadingStates.push(state.recentlyClosedTabsLoading);
+      return originalRecentlyClosedRenderTabs();
+    };
+    renderTabs();
+  `, popupSandbox);
+  const staleRequest = popupSandbox.loadRecentlyClosedTabs();
+  popupSandbox.invalidateRecentlyClosedTabs();
+  assert.strictEqual(vm.runInContext('state.visibleTabs.length', popupSandbox), 0);
+  assert.strictEqual(recentlyClosedRequests.length, 1);
+
+  recentlyClosedRequests[0]({
+    ok: true,
+    payload: {
+      recentlyClosedTabs: [{
+        id: 'closed-stale',
+        title: 'GitHub 过期响应',
+        url: 'https://github.com/acme/stale',
+        groupKey: 'github.com',
+        groupTitle: 'github',
+        resultType: 'recentlyClosed'
+      }]
+    }
+  });
+  await staleRequest;
+  assert.strictEqual(recentlyClosedRequests.length, 2);
+  assert.strictEqual(vm.runInContext('state.recentlyClosedTabsLoading', popupSandbox), true);
+
+  recentlyClosedRequests[1]({
+    ok: true,
+    payload: {
+      recentlyClosedTabs: [{
+        id: 'closed-latest',
+        title: 'GitHub 最新关闭页面',
+        url: 'https://github.com/acme/latest',
+        groupKey: 'github.com',
+        groupTitle: 'github',
+        resultType: 'recentlyClosed'
+      }]
+    }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(vm.runInContext('state.recentlyClosedTabsLoading', popupSandbox), false);
+  assert.deepStrictEqual(Array.from(vm.runInContext('state.visibleTabs', popupSandbox), (tab) => tab.id), ['closed-latest']);
+  assert.strictEqual(Array.from(popupSandbox.recentlyClosedRenderLoadingStates).at(-1), false);
+  assert.strictEqual(popupSandbox.recentlyClosedRenderLoadingStates.filter((loading) => loading).length, 1);
+  vm.runInContext('renderTabs = originalRecentlyClosedRenderTabs;', popupSandbox);
+  popupSandbox.chrome.runtime.sendMessage = originalPopupSendMessage;
 }
 
 assert.strictEqual(typeof popupSandbox.getVisibleTabsFromState, 'function');
@@ -1526,6 +1622,63 @@ const multiKeywordResults = popupSandbox.getVisibleTabsFromState({
   recentlyClosedTabs: []
 });
 assert.deepStrictEqual(Array.from(multiKeywordResults, (tab) => tab.id), [12]);
+vm.runInContext(`
+  globalThis.searchScoreCallCounts = new Map();
+  globalThis.originalSearchMatchScore = getSearchMatchScore;
+  getSearchMatchScore = function (tab, query) {
+    const key = String(tab.id);
+    searchScoreCallCounts.set(key, (searchScoreCallCounts.get(key) || 0) + 1);
+    return originalSearchMatchScore(tab, query);
+  };
+`, popupSandbox);
+popupSandbox.getVisibleTabsFromState({
+  query: 'gh',
+  tabs: searchEnhancementTabs,
+  recentlyClosedTabs: [{
+    id: 'closed-gh',
+    title: 'GitHub 已关闭页面',
+    url: 'https://github.com/acme/closed',
+    groupKey: 'github.com',
+    lastAccessedAt: 0,
+    resultType: 'recentlyClosed'
+  }]
+});
+assert.strictEqual(popupSandbox.searchScoreCallCounts.size, 4);
+assert.ok(Array.from(popupSandbox.searchScoreCallCounts.values()).every((count) => count === 1));
+vm.runInContext('getSearchMatchScore = originalSearchMatchScore;', popupSandbox);
+
+const navigationItems = Array.from({ length: 3 }, () => ({
+  classList: { add() {}, remove() {} },
+  scrollIntoView() {}
+}));
+const searchResultList = popupSandbox.document.getElementById('searchResultList');
+const originalResultQuerySelectorAll = searchResultList.querySelectorAll;
+searchResultList.querySelectorAll = () => navigationItems;
+vm.runInContext(`
+  state.visibleTabs = [{ id: 11 }, { id: 12 }, { id: 13 }];
+  state.selectedIndex = 0;
+  globalThis.navigationSearchCount = 0;
+  globalThis.navigationRenderCount = 0;
+  globalThis.originalVisibleTabsForNavigation = getVisibleTabsFromState;
+  globalThis.originalRenderTabsForNavigation = renderTabs;
+  getVisibleTabsFromState = function () {
+    navigationSearchCount += 1;
+    return originalVisibleTabsForNavigation.apply(this, arguments);
+  };
+  renderTabs = function () {
+    navigationRenderCount += 1;
+  };
+`, popupSandbox);
+popupSandbox.handleSearchKeydown({ key: 'ArrowDown', preventDefault() {} });
+popupSandbox.handleSearchKeydown({ key: 'ArrowUp', preventDefault() {} });
+assert.strictEqual(popupSandbox.navigationSearchCount, 0);
+assert.strictEqual(popupSandbox.navigationRenderCount, 0);
+assert.strictEqual(vm.runInContext('state.selectedIndex', popupSandbox), 0);
+vm.runInContext(`
+  getVisibleTabsFromState = originalVisibleTabsForNavigation;
+  renderTabs = originalRenderTabsForNavigation;
+`, popupSandbox);
+searchResultList.querySelectorAll = originalResultQuerySelectorAll;
 assert.ok(
   popupSandbox.getSearchMatchScore(searchEnhancementTabs[0], 'gpr') > 0,
   '标题首字母缩写应能命中 GitHub Pull Requests'
@@ -1547,25 +1700,30 @@ const visibleRecentTabs = popupSandbox.getVisibleTabsFromState({
   ]
 });
 assert.deepStrictEqual(Array.from(visibleRecentTabs, (tab) => tab.id), [4]);
-assert.strictEqual(typeof popupSandbox.getSearchRankingScore, 'function');
 const nowForSearchRank = Date.now();
-const recentInternalPageScore = popupSandbox.getSearchRankingScore({
-  id: 5,
-  title: '扩展程序',
-  url: 'chrome://extensions/',
-  groupKey: '其他',
-  groupTitle: '其他',
-  lastAccessedAt: nowForSearchRank
-}, 'ex', nowForSearchRank);
-const oldTitleMatchScore = popupSandbox.getSearchRankingScore({
-  id: 6,
-  title: 'Nexus Repository Manager',
-  url: 'https://nexus.ddxq.mobi/#browse/search=keyword%3Dplan-base-data-client',
-  groupKey: 'ddxq.mobi',
-  groupTitle: 'ddxq',
-  lastAccessedAt: nowForSearchRank - (2 * 60 * 60 * 1000)
-}, 'ex', nowForSearchRank);
-assert.ok(recentInternalPageScore > oldTitleMatchScore);
+const recentRankedResults = popupSandbox.getVisibleTabsFromState({
+  query: 'ex',
+  tabs: [
+    {
+      id: 5,
+      title: '扩展程序',
+      url: 'chrome://extensions/',
+      groupKey: '其他',
+      groupTitle: '其他',
+      lastAccessedAt: nowForSearchRank
+    },
+    {
+      id: 6,
+      title: 'Nexus Repository Manager',
+      url: 'https://nexus.ddxq.mobi/#browse/search=keyword%3Dplan-base-data-client',
+      groupKey: 'ddxq.mobi',
+      groupTitle: 'ddxq',
+      lastAccessedAt: nowForSearchRank - (2 * 60 * 60 * 1000)
+    }
+  ],
+  recentlyClosedTabs: []
+});
+assert.deepStrictEqual(Array.from(recentRankedResults, (tab) => tab.id), [5, 6]);
 assert.strictEqual(typeof popupSandbox.formatGroupRuleThresholdText, 'function');
 assert.strictEqual(popupSandbox.formatGroupRuleThresholdText(null, 2), '使用全局阈值：至少 2 个标签');
 assert.strictEqual(popupSandbox.formatGroupRuleThresholdText(1, 2), '规则阈值：至少 1 个标签');
@@ -1706,11 +1864,6 @@ async function runAsyncChecks() {
   backgroundSandbox.queryCurrentWindowTabs = async () => [
     { id: 201, title: '当前窗口页面', url: 'https://current.example.com/a', active: true, pinned: false, index: 0 }
   ];
-  backgroundSandbox.queryAllWindowTabs = async () => [
-    { id: 201, title: '当前窗口页面', url: 'https://current.example.com/a', active: true, pinned: false, index: 0 },
-    { id: 202, title: '其他窗口副本一', url: 'https://other.example.com/dup', active: false, pinned: false, index: 0 },
-    { id: 203, title: '其他窗口副本二', url: 'https://other.example.com/dup', active: false, pinned: false, index: 1 }
-  ];
   assert.strictEqual(
     (await backgroundSandbox.getDuplicateOverview()).duplicateCount,
     0
@@ -1720,7 +1873,6 @@ async function runAsyncChecks() {
     { id: 204, title: '当前窗口副本一', url: 'https://current.example.com/dup', active: true, pinned: false, index: 0 },
     { id: 205, title: '当前窗口副本二', url: 'https://current.example.com/dup', active: false, pinned: false, index: 1 }
   ];
-  backgroundSandbox.queryAllWindowTabs = async () => [];
   assert.strictEqual(
     (await backgroundSandbox.getDuplicateOverview()).duplicateCount,
     1
@@ -1735,8 +1887,19 @@ async function runAsyncChecks() {
     [304, { id: 304, title: '仍可关闭页', url: 'https://example.com/dup', windowId: 31, active: false, pinned: false, audible: false, index: 3 }],
     [305, { id: 305, title: '确认后新增页', url: 'https://example.com/dup', windowId: 31, active: false, pinned: false, audible: false, index: 4 }]
   ]);
+  let duplicateCloseQueryCount = 0;
   backgroundSandbox.chrome.tabs = {
-    query: async ({ windowId }) => Array.from(duplicateCloseTabs.values()).filter((tab) => tab.windowId === windowId),
+    query: async ({ windowId }) => {
+      duplicateCloseQueryCount += 1;
+      return Array.from(duplicateCloseTabs.values()).filter((tab) => tab.windowId === windowId);
+    },
+    get: async (tabId) => {
+      if (!duplicateCloseTabs.has(tabId)) {
+        throw new Error('标签不存在');
+      }
+
+      return duplicateCloseTabs.get(tabId);
+    },
     remove: async (tabId) => {
       duplicateCloseRemovedIds.push(tabId);
       duplicateCloseTabs.delete(tabId);
@@ -1744,7 +1907,7 @@ async function runAsyncChecks() {
   };
   const duplicateCloseResult = await backgroundSandbox.closeSelectedDuplicateTabs(31, [{
     duplicateKey: duplicateCloseKey,
-    closeTabIds: [302, 303, 304]
+    closeTabIds: [302, 303, 304, 304]
   }]);
   assert.deepStrictEqual({ ...duplicateCloseResult }, {
     closedCount: 1,
@@ -1752,7 +1915,86 @@ async function runAsyncChecks() {
     failedCount: 0
   });
   assert.deepStrictEqual(duplicateCloseRemovedIds, [304]);
+  assert.strictEqual(duplicateCloseQueryCount, 1);
   assert.strictEqual(duplicateCloseTabs.has(305), true);
+
+  backgroundSandbox.chrome.tabs = {
+    query: async () => [],
+    get: async () => {
+      throw new Error('不应复核已消失的组');
+    },
+    remove: async () => {
+      throw new Error('不应关闭已消失的组');
+    }
+  };
+  const disappearedGroupResult = await backgroundSandbox.closeSelectedDuplicateTabs(31, [{
+    duplicateKey: duplicateCloseKey,
+    closeTabIds: [401, 401, 402]
+  }]);
+  assert.deepStrictEqual({ ...disappearedGroupResult }, {
+    closedCount: 0,
+    skippedCount: 2,
+    failedCount: 0
+  });
+
+  const pendingKeeperTabs = new Map([
+    [501, { id: 501, url: 'https://example.com/pending', pendingUrl: 'https://example.com/next', windowId: 31, active: false, pinned: false, audible: false, index: 0 }],
+    [502, { id: 502, url: 'https://example.com/pending', windowId: 31, active: false, pinned: false, audible: false, index: 1 }],
+    [503, { id: 503, url: 'https://example.com/pending', windowId: 31, active: false, pinned: false, audible: false, index: 2 }]
+  ]);
+  let pendingKeeperRemoveCount = 0;
+  backgroundSandbox.chrome.tabs = {
+    query: async () => Array.from(pendingKeeperTabs.values()),
+    get: async (tabId) => pendingKeeperTabs.get(tabId),
+    remove: async () => {
+      pendingKeeperRemoveCount += 1;
+    }
+  };
+  const pendingKeeperResult = await backgroundSandbox.closeSelectedDuplicateTabs(31, [{
+    duplicateKey: backgroundSandbox.normalizeUrlForDuplicate('https://example.com/pending'),
+    closeTabIds: [502, 503]
+  }]);
+  assert.deepStrictEqual({ ...pendingKeeperResult }, {
+    closedCount: 0,
+    skippedCount: 2,
+    failedCount: 0
+  });
+  assert.strictEqual(pendingKeeperRemoveCount, 0);
+
+  const missingTargetTabs = new Map([
+    [601, { id: 601, url: 'https://example.com/missing', windowId: 31, active: false, pinned: false, audible: false, index: 0 }],
+    [602, { id: 602, url: 'https://example.com/missing', windowId: 31, active: false, pinned: false, audible: false, index: 1 }],
+    [603, { id: 603, url: 'https://example.com/missing', windowId: 31, active: false, pinned: false, audible: false, index: 2 }]
+  ]);
+  const missingTargetRemovedIds = [];
+  let missingTargetSnapshotRead = false;
+  backgroundSandbox.chrome.tabs = {
+    query: async () => {
+      missingTargetSnapshotRead = true;
+      return Array.from(missingTargetTabs.values());
+    },
+    get: async (tabId) => {
+      if (tabId === 602 && missingTargetSnapshotRead) {
+        throw new Error('目标已消失');
+      }
+
+      return missingTargetTabs.get(tabId);
+    },
+    remove: async (tabId) => {
+      missingTargetRemovedIds.push(tabId);
+      missingTargetTabs.delete(tabId);
+    }
+  };
+  const missingTargetResult = await backgroundSandbox.closeSelectedDuplicateTabs(31, [{
+    duplicateKey: backgroundSandbox.normalizeUrlForDuplicate('https://example.com/missing'),
+    closeTabIds: [602, 603]
+  }]);
+  assert.deepStrictEqual({ ...missingTargetResult }, {
+    closedCount: 1,
+    skippedCount: 1,
+    failedCount: 0
+  });
+  assert.deepStrictEqual(missingTargetRemovedIds, [603]);
 
   const closeSearchResultRemovedIds = [];
   const closeSearchResultTabs = new Map([
@@ -1985,10 +2227,41 @@ async function runAsyncChecks() {
     }
   };
 
-  await backgroundSandbox.reconcileCurrentWindowGroups({ minTabsPerGroup: 3 });
-  assert.deepStrictEqual(groupOperations.grouped, [[21, 22, 23]]);
+  const reusedGroupResult = await backgroundSandbox.reconcileCurrentWindowGroups({ minTabsPerGroup: 3 });
+  assert.deepStrictEqual(groupOperations.grouped, []);
   assert.deepStrictEqual(groupOperations.ungrouped, [[31], [41]]);
+  assert.strictEqual(reusedGroupResult.groupedCount, 0);
+  assert.strictEqual(groupOperations.updated[0].groupId, 1);
   assert.strictEqual(groupOperations.updated[0].options.title, 'google');
+
+  groupOperations.grouped = [];
+  groupOperations.ungrouped = [];
+  groupOperations.updated = [];
+  backgroundSandbox.queryCurrentWindowTabs = async () => [
+    { id: 24, url: 'https://mail.google.com/inbox', pinned: false, groupId: 10 },
+    { id: 25, url: 'https://docs.google.com/document', pinned: false, groupId: 10 },
+    { id: 26, url: 'https://github.com/acme/one', pinned: false, groupId: -1 },
+    { id: 27, url: 'https://github.com/acme/two', pinned: false, groupId: -1 }
+  ];
+
+  const mixedGroupResult = await backgroundSandbox.reconcileCurrentWindowGroups({ minTabsPerGroup: 2 });
+  assert.deepStrictEqual(groupOperations.grouped, [[26, 27]]);
+  assert.strictEqual(mixedGroupResult.groupedCount, 1);
+  assert.deepStrictEqual(groupOperations.updated.map((item) => item.options.color), ['blue', 'green']);
+
+  groupOperations.grouped = [];
+  groupOperations.ungrouped = [];
+  groupOperations.updated = [];
+  backgroundSandbox.queryCurrentWindowTabs = async () => [
+    { id: 28, url: 'https://mail.google.com/inbox', pinned: false, groupId: 20 },
+    { id: 29, url: 'https://docs.google.com/document', pinned: false, groupId: 20 },
+    { id: 30, url: 'https://github.com/acme/one', pinned: false, groupId: 20 },
+    { id: 32, url: 'https://github.com/acme/two', pinned: false, groupId: 20 }
+  ];
+
+  const splitNativeGroupResult = await backgroundSandbox.reconcileCurrentWindowGroups({ minTabsPerGroup: 2 });
+  assert.deepStrictEqual(groupOperations.grouped, [[28, 29], [30, 32]]);
+  assert.strictEqual(splitNativeGroupResult.groupedCount, 2);
 
   groupOperations.grouped = [];
   groupOperations.ungrouped = [];
@@ -2045,20 +2318,6 @@ async function runAsyncChecks() {
     groupRules: []
   });
   assert.deepStrictEqual(groupOperations.grouped, [[72, 73]]);
-  assert.strictEqual(groupOperations.updated[0].options.title, 'foo');
-
-  groupOperations.grouped = [];
-  groupOperations.updated = [];
-  await backgroundSandbox.regroupRestoredTabs([
-    { id: 81, title: '固定冲突', url: 'https://one.foo.net/a', pinned: true, index: 0 },
-    { id: 82, title: '工作页一', url: 'https://a.foo.com/a', pinned: false, index: 1 },
-    { id: 83, title: '工作页二', url: 'https://b.foo.com/b', pinned: false, index: 2 }
-  ], {
-    minTabsPerGroup: 2,
-    priorityGroups: [],
-    groupRules: []
-  });
-  assert.deepStrictEqual(groupOperations.grouped, [[82, 83]]);
   assert.strictEqual(groupOperations.updated[0].options.title, 'foo');
 
   const restoreOperations = {

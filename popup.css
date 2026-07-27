@@ -93,7 +93,6 @@ h1 {
   color: var(--muted);
 }
 
-.stats-grid,
 .action-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -205,26 +204,6 @@ h1 {
 
 .setting-unit {
   padding-bottom: 8px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.stat-item {
-  min-width: 0;
-  padding: 10px 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-soft);
-}
-
-.stat-item strong {
-  display: block;
-  font-size: 18px;
-}
-
-.stat-item span {
-  display: block;
-  margin-top: 2px;
   color: var(--muted);
   font-size: 12px;
 }
@@ -408,22 +387,6 @@ kbd {
 
 .section-title h2 {
   font-size: 14px;
-}
-
-.icon-help-button {
-  /* 排序说明属于辅助信息，用小尺寸按钮避免抢占搜索结果标题的视觉层级。 */
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  min-width: 18px;
-  height: 18px;
-  min-height: 18px;
-  padding: 0;
-  border-radius: 50%;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1;
 }
 
 .sort-help-text {
@@ -1419,26 +1382,6 @@ button:disabled {
   margin-top: 0;
 }
 
-.management-section-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #475569;
-  font-size: 11px;
-  font-weight: 760;
-}
-
-.management-section-label:not(:first-child) {
-  margin-top: 6px;
-}
-
-.management-section-label::after {
-  content: "";
-  height: 1px;
-  flex: 1;
-  background: #e2e8f0;
-}
-
 .settings-strip,
 .group-rule-form,
 .condition-group {
@@ -1468,17 +1411,6 @@ button:disabled {
 .inline-actions button,
 .compact-button {
   min-height: 34px;
-}
-
-.icon-help-button {
-  min-width: 28px;
-  width: 28px;
-  min-height: 28px;
-  height: 28px;
-  border-color: #e2e8f0;
-  color: var(--muted);
-  background: var(--surface);
-  font-size: 12px;
 }
 
 .star-button {

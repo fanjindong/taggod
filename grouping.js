@@ -4,8 +4,6 @@
     maxSessionCount: 10,
     // 默认至少两个同主域名标签才建组，原因是单标签分组通常只会增加标签栏噪音。
     minTabsPerGroup: 2,
-    organizeWithGroups: true,
-    duplicateKeepStrategy: 'active-or-left',
     // 自定义规则默认为空，旧用户升级后仍沿用主域名分组。
     groupRules: [],
     priorityGroups: []

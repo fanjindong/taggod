@@ -540,6 +540,25 @@ kbd {
   border-top: 1px solid var(--line);
 }
 
+.performance-diagnostics-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.performance-diagnostics-text {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .group-list {
   display: grid;
   gap: 8px;
@@ -925,6 +944,7 @@ body {
 .quick-status,
 .quick-results-section,
 .quick-action-area,
+.performance-diagnostics-panel,
 .more-tools-section,
 .status-text {
   margin-top: 0;

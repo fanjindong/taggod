@@ -1,3 +1,16 @@
+if (typeof document !== 'undefined') {
+  try {
+    globalThis.__tabgodPopupGroupingPerformance = {
+      start: typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : null,
+      end: null
+    };
+  } catch (error) {
+    globalThis.__tabgodPopupGroupingPerformance = { start: null, end: null };
+  }
+}
+
 (() => {
   const DEFAULT_SETTINGS = {
     // 限制保存数量是为了避免本地存储无限增长，同时保留最近的工作现场。
@@ -768,3 +781,15 @@
     normalizeSettings
   });
 })();
+
+if (typeof document !== 'undefined') {
+  try {
+    const timing = globalThis.__tabgodPopupGroupingPerformance || { start: null, end: null };
+    timing.end = typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? performance.now()
+      : null;
+    globalThis.__tabgodPopupGroupingPerformance = timing;
+  } catch (error) {
+    // 性能探针失败不能影响共享分组逻辑。
+  }
+}

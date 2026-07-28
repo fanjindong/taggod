@@ -83,8 +83,22 @@
           </div>
         </section>
         <div class="quick-action-footer">
+          <button id="performanceDiagnosticsButton" class="management-toggle-button" type="button" aria-expanded="false" aria-controls="performanceDiagnosticsSection">性能诊断</button>
           <button id="moreToolsButton" class="management-toggle-button" type="button" aria-expanded="false" aria-controls="moreToolsSection">高级管理</button>
         </div>
+      </section>
+
+      <section id="performanceDiagnosticsSection" class="performance-diagnostics-panel is-hidden" aria-label="性能诊断" hidden>
+        <div class="section-title">
+          <h2>性能诊断</h2>
+        </div>
+        <p class="helper-text">本机保留最近 20 次弹窗记录，不会自动上传。</p>
+        <p id="performanceDiagnosticsStatus" class="helper-text" role="status">正在采集本次性能记录</p>
+        <div class="inline-actions">
+          <button id="copyPerformanceDiagnosticsButton" type="button">复制性能诊断</button>
+          <button id="clearPerformanceDiagnosticsButton" class="danger-button" type="button">清除性能记录</button>
+        </div>
+        <textarea id="performanceDiagnosticsText" class="performance-diagnostics-text is-hidden" aria-label="性能诊断记录" readonly hidden></textarea>
       </section>
 
       <section id="moreToolsSection" class="more-tools-section is-hidden" aria-label="高级管理" hidden>

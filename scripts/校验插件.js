@@ -83,6 +83,12 @@ assert.ok(popupStructureHtmlContent.includes('id="managementRulesPanel"'));
 assert.ok(popupStructureHtmlContent.includes('id="managementPriorityPanel"'));
 assert.ok(popupStructureHtmlContent.includes('id="managementWorkspacePanel"'));
 assert.ok(popupStructureHtmlContent.includes('id="managementCleanupPanel"'));
+assert.ok(popupStructureHtmlContent.includes('id="performanceDiagnosticsButton"'));
+assert.ok(popupStructureHtmlContent.includes('aria-controls="performanceDiagnosticsSection"'));
+assert.ok(popupStructureHtmlContent.includes('id="copyPerformanceDiagnosticsButton"'));
+assert.ok(popupStructureHtmlContent.includes('id="clearPerformanceDiagnosticsButton"'));
+assert.ok(popupStructureHtmlContent.includes('id="performanceDiagnosticsText"'));
+assert.ok(popupStructureHtmlContent.indexOf('id="performanceDiagnosticsSection"') < popupStructureHtmlContent.indexOf('id="moreToolsSection"'));
 assert.strictEqual((popupStructureHtmlContent.match(/data-management-panel-button="/g) || []).length, 4);
 assert.strictEqual((popupStructureHtmlContent.match(/data-management-panel="/g) || []).length, 4);
 assert.strictEqual((popupStructureHtmlContent.match(/id="scanDuplicatesButton"/g) || []).length, 1);
@@ -99,6 +105,8 @@ assert.ok(popupStructureCssContent.includes('.secondary-action-grid'));
 assert.ok(popupStructureCssContent.includes('.management-toggle-button'));
 assert.ok(popupStructureCssContent.includes('.management-summary-button'));
 assert.ok(popupStructureCssContent.includes('.management-panel'));
+assert.ok(popupStructureCssContent.includes('.performance-diagnostics-panel'));
+assert.ok(popupStructureCssContent.includes('.performance-diagnostics-text'));
 assert.ok(popupStructureCssContent.includes('.quick-result-item'));
 assert.ok(popupStructureJsContent.includes('quick-result-open-button'));
 assert.ok(popupStructureJsContent.includes('quick-result-action-slot'));
@@ -253,6 +261,19 @@ const backgroundSandbox = {
 
 vm.createContext(backgroundSandbox);
 vm.runInContext(groupingContent, backgroundSandbox, { filename: 'grouping.js' });
+assert.strictEqual('__tabgodPopupGroupingPerformance' in backgroundSandbox, false);
+const throwingPerformanceGroupingSandbox = {
+  document: {},
+  performance: {
+    now() {
+      throw new Error('计时器不可用');
+    }
+  }
+};
+vm.createContext(throwingPerformanceGroupingSandbox);
+vm.runInContext(groupingContent, throwingPerformanceGroupingSandbox, { filename: 'grouping.js' });
+assert.strictEqual(typeof throwingPerformanceGroupingSandbox.TabGodGrouping.normalizeSettings, 'function');
+assert.strictEqual(throwingPerformanceGroupingSandbox.__tabgodPopupGroupingPerformance.start, null);
 const backgroundGroupingApi = backgroundSandbox.TabGodGrouping;
 let backgroundNormalizeSettingsCallCount = 0;
 let backgroundResolvedGroupInfoCallCount = 0;
@@ -1284,10 +1305,19 @@ const popupChromeCalls = {
   messages: [],
   tabQueries: [],
   storageGets: [],
+  storageSets: [],
+  storageRemoves: [],
   commandReads: 0,
   sessionChangedListeners: []
 };
 const popupElements = new Map();
+const popupPerformanceStoredState = {};
+const popupPerformanceSessionState = {};
+const popupClipboardWrites = [];
+let popupClipboardFailure = false;
+let popupConfirmResult = false;
+let popupRemoveFailure = false;
+let popupDeferredRemove = null;
 
 function createPopupTestElement() {
   return {
@@ -1303,6 +1333,7 @@ function createPopupTestElement() {
       this.attributes[name] = String(value);
     },
     focus() {},
+    select() {},
     scrollIntoView() {},
     classList: {
       toggle() {},
@@ -1399,12 +1430,60 @@ const popupSandbox = {
       local: {
         async get(keys) {
           popupChromeCalls.storageGets.push(keys);
-
-          return {
+          const stored = Object.assign({
             'tabgod.settings': popupUnifiedSearchSettings,
             'tabgod.recentAccess': { 202: 400, 203: 300 }
-          };
+          }, popupPerformanceStoredState);
+          return keys.reduce((result, key) => {
+            if (Object.prototype.hasOwnProperty.call(stored, key)) {
+              result[key] = stored[key];
+            }
+            return result;
+          }, {});
+        },
+        async set(values) {
+          popupChromeCalls.storageSets.push(values);
+          Object.assign(popupPerformanceStoredState, values);
+        },
+        async remove(key) {
+          if (popupDeferredRemove) {
+            await popupDeferredRemove;
+          }
+          if (popupRemoveFailure) {
+            throw new Error('模拟清除失败');
+          }
+          popupChromeCalls.storageRemoves.push(key);
+          delete popupPerformanceStoredState[key];
         }
+      },
+      session: {
+        async get(keys) {
+          return keys.reduce((result, key) => {
+            if (Object.prototype.hasOwnProperty.call(popupPerformanceSessionState, key)) {
+              result[key] = popupPerformanceSessionState[key];
+            }
+            return result;
+          }, {});
+        },
+        async set(values) {
+          Object.assign(popupPerformanceSessionState, values);
+        }
+      }
+    }
+  },
+  crypto: {
+    randomUUID() {
+      return 'popup-performance-session';
+    }
+  },
+  navigator: {
+    userAgent: 'Mozilla/5.0 Chrome/138.0.0.0 Safari/537.36',
+    clipboard: {
+      async writeText(text) {
+        if (popupClipboardFailure) {
+          throw new Error('模拟剪贴板失败');
+        }
+        popupClipboardWrites.push(text);
       }
     }
   },
@@ -1413,7 +1492,7 @@ const popupSandbox = {
       return null;
     },
     confirm() {
-      return false;
+      return popupConfirmResult;
     }
   },
   Intl,
@@ -1744,6 +1823,13 @@ assert.ok(popupJsContent.includes('const DUPLICATE_REVIEW_SCROLL_OPTIONS = { blo
 assert.ok(popupJsContent.includes('section.scrollIntoView(DUPLICATE_REVIEW_SCROLL_OPTIONS);'));
 assert.ok(popupJsContent.includes('move-priority-group'));
 assert.ok(popupJsContent.includes('group-order-button'));
+const performanceDiagnosticsSource = popupJsContent.slice(
+  popupJsContent.indexOf('function togglePerformanceDiagnostics()'),
+  popupJsContent.indexOf('function toggleSortHelp()')
+);
+assert.ok(!performanceDiagnosticsSource.includes("sendMessage("));
+assert.ok(!performanceDiagnosticsSource.includes('loadManagementState('));
+assert.ok(!performanceDiagnosticsSource.includes('loadState('));
 
 const popupHtml = fs.readFileSync(path.join(rootDir, 'popup.html'), 'utf8');
 const popupCssContent = fs.readFileSync(path.join(rootDir, 'popup.css'), 'utf8');
@@ -1813,8 +1899,604 @@ assert.ok(usageSvgContent.includes('最近使用与键盘选择'));
 assert.ok(usageSvgContent.includes('分组规则是核心能力'));
 assert.ok(usageSvgContent.includes('满足全部或满足任一'));
 
+async function assertPopupPerformanceContract() {
+  assert.strictEqual(vm.runInContext('popupPerformance.status', popupSandbox), 'unavailable');
+  assert.strictEqual('__tabgodPopupGroupingPerformance' in popupSandbox, false);
+
+  let performanceNow = 100;
+  popupSandbox.performance = {
+    now() {
+      performanceNow += 1;
+      return performanceNow;
+    }
+  };
+  vm.runInContext(`
+    popupPerformance.enabled = true;
+    popupPerformance.status = 'collecting';
+    popupPerformance.freezeStarted = false;
+    popupPerformance.stages = {};
+  `, popupSandbox);
+  await popupSandbox.loadPopupStateFromBrowser();
+  await popupSandbox.loadCommandShortcuts();
+  const startupStages = vm.runInContext('popupPerformance.stages', popupSandbox);
+  assert.strictEqual(startupStages.currentTabs.outcome, 'success');
+  assert.strictEqual(startupStages.currentTabs.count, 2);
+  assert.strictEqual(startupStages.allTabs.count, 3);
+  assert.strictEqual(startupStages.storage.count, 2);
+  assert.strictEqual(startupStages.browserStateRead.outcome, 'success');
+  assert.strictEqual(startupStages.stateBuild.outcome, 'success');
+  assert.strictEqual(startupStages.commands.count, 2);
+  const firstCurrentTabsStart = startupStages.currentTabs.start;
+  await popupSandbox.loadPopupStateFromBrowser();
+  assert.strictEqual(
+    vm.runInContext('popupPerformance.stages.currentTabs.start', popupSandbox),
+    firstCurrentTabsStart
+  );
+  await assert.rejects(
+    () => popupSandbox.measurePopupPerformanceCall(
+      'rejectedCall',
+      () => Promise.reject(new Error('保持拒绝语义'))
+    ),
+    /保持拒绝语义/
+  );
+  assert.strictEqual(
+    vm.runInContext('popupPerformance.stages.rejectedCall.outcome', popupSandbox),
+    'error'
+  );
+
+  delete popupPerformanceStoredState['tabgod.popupPerformanceHistory'];
+  delete popupPerformanceSessionState['tabgod.popupPerformanceSession'];
+
+  for (let index = 0; index < 21; index += 1) {
+    const recordedAt = new Date(Date.UTC(2026, 6, 28, 0, 0, index)).toISOString();
+    const result = await popupSandbox.persistPopupPerformanceSnapshot({ recordedAt });
+    assert.strictEqual(result.saved, true);
+  }
+
+  const history = popupPerformanceStoredState['tabgod.popupPerformanceHistory'];
+  assert.strictEqual(history.schemaVersion, 1);
+  assert.strictEqual(history.samples.length, 20);
+  assert.strictEqual(history.samples[0].recordedAt, '2026-07-28T00:00:01.000Z');
+  assert.strictEqual(history.samples[0].session.recordedPopupIndex, 2);
+  assert.strictEqual(history.samples[19].session.recordedPopupIndex, 21);
+  assert.strictEqual(history.samples[19].session.firstRecordedPopup, false);
+  assert.strictEqual(history.samples[19].session.id, 'popup-performance-session');
+
+  const messageCount = popupChromeCalls.messages.length;
+  const tabQueryCount = popupChromeCalls.tabQueries.length;
+  popupSandbox.togglePerformanceDiagnostics();
+  assert.strictEqual(vm.runInContext('state.performanceDiagnosticsVisible', popupSandbox), true);
+  assert.strictEqual(popupChromeCalls.messages.length, messageCount);
+  assert.strictEqual(popupChromeCalls.tabQueries.length, tabQueryCount);
+
+  vm.runInContext("popupPerformance.status = 'saved'; popupPerformance.message = '';", popupSandbox);
+  await popupSandbox.copyPerformanceDiagnostics();
+  const exported = JSON.parse(popupClipboardWrites.at(-1));
+  assert.strictEqual(exported.format, 'tabgod-popup-performance');
+  assert.strictEqual(exported.schemaVersion, 1);
+  assert.strictEqual(exported.sampleCount, 20);
+
+  popupClipboardFailure = true;
+  await popupSandbox.copyPerformanceDiagnostics();
+  popupClipboardFailure = false;
+  assert.ok(vm.runInContext('state.performanceDiagnosticsText.length', popupSandbox) > 0);
+  assert.strictEqual(
+    popupElements.get('performanceDiagnosticsStatus').textContent,
+    '自动复制失败，请从下方文本框手动复制'
+  );
+
+  const storageGetCount = popupChromeCalls.storageGets.length;
+  vm.runInContext("popupPerformance.status = 'collecting';", popupSandbox);
+  await popupSandbox.copyPerformanceDiagnostics();
+  assert.strictEqual(popupChromeCalls.storageGets.length, storageGetCount);
+  assert.strictEqual(
+    popupElements.get('performanceDiagnosticsStatus').textContent,
+    '本次记录仍在采集，请稍后重试'
+  );
+
+  popupConfirmResult = true;
+  popupRemoveFailure = true;
+  vm.runInContext(`
+    popupPerformance.status = 'persisting';
+    popupPerformance.persistPromise = Promise.resolve().then(() => {
+      const suppressed = popupPerformance.suppressCurrentHistory;
+      popupPerformance.status = suppressed ? 'unavailable' : 'saved';
+      return { saved: !suppressed, suppressed };
+    });
+  `, popupSandbox);
+  await popupSandbox.clearPerformanceDiagnostics();
+  assert.strictEqual(vm.runInContext('popupPerformance.status', popupSandbox), 'saved');
+  assert.strictEqual(vm.runInContext('popupPerformance.suppressCurrentHistory', popupSandbox), false);
+  assert.strictEqual('tabgod.popupPerformanceHistory' in popupPerformanceStoredState, true);
+
+  popupRemoveFailure = false;
+  let rejectDeferredRemove;
+  popupDeferredRemove = new Promise((resolve, reject) => {
+    rejectDeferredRemove = reject;
+  });
+  vm.runInContext(`
+    popupPerformance.status = 'collecting';
+    popupPerformance.persistPromise = null;
+  `, popupSandbox);
+  const collectingClear = popupSandbox.clearPerformanceDiagnostics();
+  vm.runInContext(`
+    popupPerformance.status = 'persisting';
+    popupPerformance.persistPromise = persistPopupPerformanceSnapshot({
+      recordedAt: '2026-07-28T00:01:00.000Z'
+    }).then((result) => {
+      popupPerformance.status = result.saved ? 'saved' : 'unavailable';
+      return result;
+    });
+  `, popupSandbox);
+  rejectDeferredRemove(new Error('模拟采集中清除失败'));
+  await collectingClear;
+  popupDeferredRemove = null;
+  assert.strictEqual(vm.runInContext('popupPerformance.status', popupSandbox), 'saved');
+  assert.strictEqual(vm.runInContext('popupPerformance.suppressCurrentHistory', popupSandbox), false);
+  assert.strictEqual(vm.runInContext('popupPerformance.clearPromise', popupSandbox), null);
+  assert.strictEqual(
+    popupPerformanceStoredState['tabgod.popupPerformanceHistory'].samples.at(-1).recordedAt,
+    '2026-07-28T00:01:00.000Z'
+  );
+
+  let resolveDeferredRemove;
+  popupDeferredRemove = new Promise((resolve) => {
+    resolveDeferredRemove = resolve;
+  });
+  vm.runInContext(`
+    popupPerformance.status = 'collecting';
+    popupPerformance.suppressCurrentHistory = false;
+    popupPerformance.persistPromise = null;
+  `, popupSandbox);
+  const successfulCollectingClear = popupSandbox.clearPerformanceDiagnostics();
+  vm.runInContext(`
+    popupPerformance.status = 'persisting';
+    popupPerformance.persistPromise = persistPopupPerformanceSnapshot({
+      recordedAt: '2026-07-28T00:02:00.000Z'
+    }).then((result) => {
+      if (popupPerformance.status !== 'cleared') {
+        popupPerformance.status = result.saved ? 'saved' : 'unavailable';
+      }
+      return result;
+    });
+  `, popupSandbox);
+  const successfulCollectingPersist = vm.runInContext('popupPerformance.persistPromise', popupSandbox);
+  resolveDeferredRemove();
+  await successfulCollectingClear;
+  const successfulCollectingResult = await successfulCollectingPersist;
+  popupDeferredRemove = null;
+  assert.strictEqual('tabgod.popupPerformanceHistory' in popupPerformanceStoredState, false);
+  assert.strictEqual(vm.runInContext('popupPerformance.status', popupSandbox), 'cleared');
+  assert.strictEqual(successfulCollectingResult.suppressed, true);
+  assert.strictEqual(popupPerformanceSessionState['tabgod.popupPerformanceSession'].recordedPopupIndex, 23);
+  const suppressed = await popupSandbox.persistPopupPerformanceSnapshot({
+    recordedAt: '2026-07-28T00:03:00.000Z'
+  });
+  assert.strictEqual(suppressed.suppressed, true);
+  assert.strictEqual('tabgod.popupPerformanceHistory' in popupPerformanceStoredState, false);
+  popupConfirmResult = false;
+
+  vm.runInContext(`
+    capturedPopupPerformanceSnapshot = null;
+    popupPaintObserverDisconnected = false;
+    popupLongTaskObserverDisconnected = false;
+    popupPerformance.enabled = true;
+    popupPerformance.status = 'collecting';
+    popupPerformance.freezeStarted = false;
+    popupPerformance.measurementPartial = false;
+    popupPerformance.paintSupported = true;
+    popupPerformance.longTaskSupported = true;
+    popupPerformance.navigation = {
+      responseEnd: 20,
+      domContentLoadedStart: 80,
+      domContentLoadedEnd: 90,
+      domComplete: 100,
+      loadEnd: 110
+    };
+    popupPerformance.points = {
+      groupingScriptStart: 30,
+      groupingScriptEnd: 40,
+      scriptStart: 50,
+      domContentLoadedHandlerStart: 80,
+      windowLoad: 105,
+      loadStateStart: 120,
+      stateReady: 220,
+      controlsReady: 235,
+      usableReadyToPaint: 240,
+      usablePaintOpportunity: 250,
+      firstContentfulPaint: 300
+    };
+    popupPerformance.stages = {
+      render: { start: 220, end: 230, duration: 10, outcome: 'success', count: null }
+    };
+    popupPerformance.longTasks = [{ start: 40, duration: 80 }];
+    popupPerformance.paintObserver = {
+      takeRecords() { return [{ name: 'first-paint', startTime: 190 }]; },
+      disconnect() { popupPaintObserverDisconnected = true; }
+    };
+    popupPerformance.longTaskObserver = {
+      takeRecords() { return [{ startTime: 260, duration: 60 }]; },
+      disconnect() { popupLongTaskObserverDisconnected = true; }
+    };
+    persistPopupPerformanceSnapshot = async (snapshot) => {
+      capturedPopupPerformanceSnapshot = snapshot;
+      return { saved: true, suppressed: false };
+    };
+    freezePopupPerformanceSample();
+  `, popupSandbox);
+  await vm.runInContext('popupPerformance.persistPromise', popupSandbox);
+  const snapshot = vm.runInContext('capturedPopupPerformanceSnapshot', popupSandbox);
+  assert.strictEqual(snapshot.derived.navigationToUsable, 300);
+  assert.strictEqual(snapshot.derived.postRenderFcpDelay, 70);
+  assert.strictEqual(snapshot.longTasks.count, 1);
+  assert.strictEqual(snapshot.longTasks.entries[0].start, 260);
+  assert.strictEqual(snapshot.outcome.measurement, 'complete');
+  assert.strictEqual(vm.runInContext('popupPaintObserverDisconnected', popupSandbox), true);
+  assert.strictEqual(vm.runInContext('popupLongTaskObserverDisconnected', popupSandbox), true);
+  vm.runInContext('ingestPopupLongTaskEntries([{ startTime: 280, duration: 70 }]);', popupSandbox);
+  assert.strictEqual(vm.runInContext('popupPerformance.longTasks.length', popupSandbox), 2);
+
+  const earlyFcpSnapshot = vm.runInContext(`
+    popupPerformance.points.firstContentfulPaint = 200;
+    buildPopupPerformanceSnapshot(250);
+  `, popupSandbox);
+  assert.strictEqual(earlyFcpSnapshot.derived.postRenderFcpDelay, null);
+
+  const preciseSnapshot = vm.runInContext(`
+    popupPerformance.navigation.responseEnd = 20.04;
+    popupPerformance.points.groupingScriptStart = 30.06;
+    popupPerformance.points.scriptStart = 50.04;
+    popupPerformance.longTasks = [
+      { start: 50.02, duration: 60 },
+      { start: 50.05, duration: 70 }
+    ];
+    buildPopupPerformanceSnapshot(250);
+  `, popupSandbox);
+  assert.strictEqual(preciseSnapshot.navigation.responseEnd, 20);
+  assert.strictEqual(preciseSnapshot.points.groupingScriptStart, 30.1);
+  assert.strictEqual(preciseSnapshot.derived.responseToGrouping, 10);
+  assert.strictEqual(preciseSnapshot.longTasks.count, 1);
+}
+
+function createPopupPerformanceLifecycleHarness(options = {}) {
+  const elements = new Map();
+  const documentListeners = {};
+  const windowListeners = {};
+  const timers = [];
+  const animationFrames = [];
+  const performanceStorageOperations = [];
+  const storedState = options.damagedHistory ? {
+    'tabgod.popupPerformanceHistory': {
+      schemaVersion: 999,
+      samples: [{ marker: 'damaged' }]
+    }
+  } : {};
+  const sessionState = {};
+  let now = 0;
+
+  const lifecycleSandbox = {
+    console,
+    URL,
+    document: {
+      visibilityState: 'visible',
+      addEventListener(type, listener) {
+        documentListeners[type] = listener;
+      },
+      getElementById(id) {
+        if (!elements.has(id)) {
+          elements.set(id, createPopupTestElement());
+        }
+        return elements.get(id);
+      },
+      querySelectorAll() {
+        return [];
+      },
+      querySelector() {
+        return null;
+      },
+      createElement() {
+        return createPopupTestElement();
+      }
+    },
+    performance: {
+      now() {
+        now += 5;
+        return now;
+      },
+      getEntriesByType(type) {
+        if (type === 'paint') {
+          return options.omitFcp
+            ? [{ name: 'first-paint', startTime: 45 }]
+            : [
+              { name: 'first-paint', startTime: 45 },
+              { name: 'first-contentful-paint', startTime: 50 }
+            ];
+        }
+        if (type === 'navigation') {
+          return [{
+            responseEnd: 3,
+            domContentLoadedEventStart: 20,
+            domContentLoadedEventEnd: 25,
+            domComplete: 35,
+            loadEventEnd: 40
+          }];
+        }
+        return [];
+      }
+    },
+    PerformanceObserver: class {
+      constructor(callback) {
+        this.callback = callback;
+      }
+
+      observe(observerOptions) {
+        if (options.paintUnsupported && observerOptions.type === 'paint') {
+          throw new Error('paint unsupported');
+        }
+      }
+
+      takeRecords() {
+        if (options.drainFailure) {
+          throw new Error('takeRecords failed');
+        }
+        return [];
+      }
+
+      disconnect() {
+        if (options.drainFailure) {
+          throw new Error('disconnect failed');
+        }
+      }
+    },
+    chrome: {
+      runtime: {
+        getManifest() {
+          return { version: '0.2.4' };
+        },
+        sendMessage() {
+          return Promise.resolve({ ok: true, payload: { duplicateCount: 0 } });
+        }
+      },
+      commands: {
+        getAll() {
+          return Promise.resolve([]);
+        }
+      },
+      sessions: {
+        onChanged: {
+          addListener() {}
+        }
+      },
+      tabs: {
+        query(queryInfo) {
+          if (options.startupFailure && queryInfo.currentWindow) {
+            return Promise.reject(new Error('tabs query failed'));
+          }
+          const tabs = [
+            { id: 1, title: '当前页', url: 'https://example.com/a', active: true, index: 0, windowId: 1, groupId: -1 },
+            { id: 2, title: '另一页', url: 'https://example.com/b', active: false, index: 1, windowId: 1, groupId: -1 }
+          ];
+          return Promise.resolve(queryInfo.currentWindow ? tabs : tabs);
+        }
+      },
+      storage: {
+        local: {
+          get(keys) {
+            if (keys.includes('tabgod.popupPerformanceHistory')) {
+              performanceStorageOperations.push('get');
+            }
+            return Promise.resolve(keys.reduce((result, key) => {
+              if (Object.prototype.hasOwnProperty.call(storedState, key)) {
+                result[key] = storedState[key];
+              }
+              return result;
+            }, {}));
+          },
+          set(values) {
+            if (Object.prototype.hasOwnProperty.call(values, 'tabgod.popupPerformanceHistory')) {
+              performanceStorageOperations.push('set');
+            }
+            if (options.localWriteFailure) {
+              return Promise.reject(new Error('local write failed'));
+            }
+            Object.assign(storedState, values);
+            return Promise.resolve();
+          },
+          remove(key) {
+            delete storedState[key];
+            return Promise.resolve();
+          }
+        },
+        session: {
+          get(keys) {
+            if (options.sessionFailure) {
+              return Promise.reject(new Error('session read failed'));
+            }
+            return Promise.resolve(keys.reduce((result, key) => {
+              if (Object.prototype.hasOwnProperty.call(sessionState, key)) {
+                result[key] = sessionState[key];
+              }
+              return result;
+            }, {}));
+          },
+          set(values) {
+            if (options.sessionFailure) {
+              return Promise.reject(new Error('session write failed'));
+            }
+            Object.assign(sessionState, values);
+            return Promise.resolve();
+          }
+        }
+      }
+    },
+    crypto: {
+      randomUUID() {
+        return 'lifecycle-session';
+      }
+    },
+    navigator: {
+      userAgent: 'Chrome/138.0.0.0'
+    },
+    window: {
+      addEventListener(type, listener) {
+        windowListeners[type] = listener;
+      },
+      setTimeout(callback) {
+        timers.push(callback);
+        return timers.length;
+      },
+      clearTimeout() {},
+      requestAnimationFrame(callback) {
+        animationFrames.push(callback);
+        return animationFrames.length;
+      },
+      requestIdleCallback(callback) {
+        return 1;
+      },
+      prompt() {
+        return null;
+      },
+      confirm() {
+        return false;
+      }
+    },
+    Intl,
+    Date,
+    Number,
+    String,
+    Array,
+    Set,
+    Map,
+    Promise
+  };
+
+  vm.createContext(lifecycleSandbox);
+  vm.runInContext(groupingContent, lifecycleSandbox, { filename: 'grouping.js' });
+  vm.runInContext(fs.readFileSync(popupPath, 'utf8'), lifecycleSandbox, { filename: 'popup.js' });
+  vm.runInContext(`
+    const lifecycleOriginalLoadState = loadState;
+    loadState = (options = {}) => {
+      lifecycleLoadPromise = lifecycleOriginalLoadState(Object.assign({}, options, {
+        skipDuplicateOverview: true
+      }));
+      return lifecycleLoadPromise;
+    };
+  `, lifecycleSandbox);
+
+  return {
+    animationFrames,
+    documentListeners,
+    lifecycleSandbox,
+    performanceStorageOperations,
+    sessionState,
+    storedState,
+    timers,
+    windowListeners
+  };
+}
+
+async function runPopupPerformanceLifecycle(harness) {
+  const {
+    animationFrames,
+    documentListeners,
+    lifecycleSandbox,
+    performanceStorageOperations,
+    timers,
+    windowListeners
+  } = harness;
+
+  documentListeners.DOMContentLoaded();
+  await lifecycleSandbox.lifecycleLoadPromise;
+  assert.strictEqual(vm.runInContext('popupPerformance.initialLoadSettled', lifecycleSandbox), true);
+  assert.strictEqual(animationFrames.length, 1);
+  assert.deepStrictEqual(performanceStorageOperations, []);
+
+  animationFrames.shift()();
+  assert.strictEqual(animationFrames.length, 1);
+  assert.deepStrictEqual(performanceStorageOperations, []);
+  animationFrames.shift()();
+  assert.deepStrictEqual(performanceStorageOperations, []);
+
+  windowListeners.load();
+  assert.strictEqual(timers.length, 1);
+  assert.deepStrictEqual(performanceStorageOperations, []);
+  timers.shift()();
+  const persistPromise = vm.runInContext('popupPerformance.persistPromise', lifecycleSandbox);
+  if (persistPromise) {
+    await persistPromise;
+  }
+
+  return persistPromise;
+}
+
+async function assertPopupPerformanceLifecycleContract() {
+  const complete = createPopupPerformanceLifecycleHarness();
+  await runPopupPerformanceLifecycle(complete);
+
+  assert.deepStrictEqual(complete.performanceStorageOperations, ['get', 'set']);
+  const sample = complete.storedState['tabgod.popupPerformanceHistory'].samples[0];
+  assert.strictEqual(sample.derived.navigationToUsable, Math.max(
+    sample.points.firstContentfulPaint,
+    sample.points.usablePaintOpportunity
+  ));
+  assert.ok(sample.points.usableReadyToPaint > sample.stages.render.end);
+  assert.ok(sample.points.usableReadyToPaint > sample.points.controlsReady);
+  assert.ok(sample.points.usablePaintOpportunity > sample.points.usableReadyToPaint);
+  assert.strictEqual(sample.navigation.loadEnd, 40);
+  assert.strictEqual(sample.outcome.measurement, 'complete');
+
+  const startupFailure = createPopupPerformanceLifecycleHarness({ startupFailure: true });
+  await runPopupPerformanceLifecycle(startupFailure);
+  const startupFailureSample = startupFailure.storedState['tabgod.popupPerformanceHistory'].samples[0];
+  assert.strictEqual(startupFailureSample.outcome.startup, 'error');
+  assert.strictEqual(startupFailureSample.outcome.measurement, 'partial');
+
+  const paintUnsupported = createPopupPerformanceLifecycleHarness({ paintUnsupported: true });
+  await runPopupPerformanceLifecycle(paintUnsupported);
+  const paintUnsupportedSample = paintUnsupported.storedState['tabgod.popupPerformanceHistory'].samples[0];
+  assert.strictEqual(paintUnsupportedSample.outcome.measurement, 'partial');
+  assert.strictEqual(paintUnsupportedSample.points.firstContentfulPaint, null);
+  assert.strictEqual(
+    paintUnsupportedSample.derived.navigationToUsable,
+    paintUnsupportedSample.points.usablePaintOpportunity
+  );
+
+  const missingFcp = createPopupPerformanceLifecycleHarness({ omitFcp: true });
+  await runPopupPerformanceLifecycle(missingFcp);
+  assert.deepStrictEqual(missingFcp.performanceStorageOperations, []);
+  assert.strictEqual('tabgod.popupPerformanceHistory' in missingFcp.storedState, false);
+
+  const observerAndSessionFailure = createPopupPerformanceLifecycleHarness({
+    drainFailure: true,
+    sessionFailure: true
+  });
+  await runPopupPerformanceLifecycle(observerAndSessionFailure);
+  const partialSample = observerAndSessionFailure.storedState['tabgod.popupPerformanceHistory'].samples[0];
+  assert.strictEqual(partialSample.outcome.measurement, 'partial');
+  assert.strictEqual(partialSample.session.id, null);
+  assert.strictEqual(partialSample.session.recordedPopupIndex, null);
+  assert.strictEqual(partialSample.session.firstRecordedPopup, null);
+
+  const localWriteFailure = createPopupPerformanceLifecycleHarness({ localWriteFailure: true });
+  await runPopupPerformanceLifecycle(localWriteFailure);
+  assert.strictEqual('tabgod.popupPerformanceHistory' in localWriteFailure.storedState, false);
+  assert.strictEqual(
+    vm.runInContext('popupPerformance.status', localWriteFailure.lifecycleSandbox),
+    'unavailable'
+  );
+
+  const damagedHistory = createPopupPerformanceLifecycleHarness({ damagedHistory: true });
+  await runPopupPerformanceLifecycle(damagedHistory);
+  const rebuiltHistory = damagedHistory.storedState['tabgod.popupPerformanceHistory'];
+  assert.strictEqual(rebuiltHistory.schemaVersion, 1);
+  assert.strictEqual(rebuiltHistory.samples.length, 1);
+  assert.strictEqual('marker' in rebuiltHistory.samples[0], false);
+}
+
 async function runAsyncChecks() {
   await assertPopupUnifiedSearchStateContract();
+  await assertPopupPerformanceContract();
+  await assertPopupPerformanceLifecycleContract();
 
   const organizeWorkflowTabs = batchNormalizationTabs.slice(0, 12).map((tab) => Object.assign({}, tab, {
     groupId: -1

@@ -144,7 +144,7 @@ assert.ok(popupStructureJsContent.includes("if (event.key === 'Enter')"));
 assert.ok(popupStructureJsContent.includes("syncSelectedIndexFromSearchResultElement(closeButton);"));
 assert.ok(popupStructureJsContent.includes('syncSelectedIndexFromSearchResultElement(event && (event.currentTarget || event.target));'));
 assert.ok(popupStructureJsContent.includes("sendMessage('close-search-result-tab'"));
-assert.ok(popupStructureJsContent.includes('tab.isCurrentWindow && tab.active'));
+assert.ok(popupStructureJsContent.includes('function isCurrentPage(tab)'));
 assert.ok(popupStructureJsContent.includes('audible: Boolean(sourceTab.audible)'));
 assert.ok(backgroundStructureJsContent.includes("importScripts('grouping.js')"));
 assert.ok(popupStructureHtmlContent.indexOf('src="grouping.js"') < popupStructureHtmlContent.indexOf('src="popup.js"'));
@@ -172,6 +172,8 @@ assert.ok(popupStructureJsContent.includes('item.appendChild(closeButton)'));
 assert.ok(!popupStructureJsContent.includes('actionSlot.appendChild(closeButton)'));
 assert.ok(popupStructureCssContent.includes('.quick-result-close-button'));
 assert.ok(popupStructureCssContent.includes('.quick-result-close-button:focus-visible'));
+assert.match(popupStructureCssContent, /\.quick-result-close-button\s*\{[^}]*opacity: 1;/s);
+assert.match(popupStructureCssContent, /\.quick-result-item\.is-selected \.quick-result-close-button\s*\{[^}]*color: #b91c1c;/s);
 assert.ok(popupStructureJsContent.includes('activeManagementPanel'));
 assert.ok(popupStructureJsContent.includes('renderManagementOverview'));
 assert.ok(popupStructureJsContent.includes('chrome.commands.getAll()'));
@@ -332,6 +334,7 @@ assert.strictEqual(recentlyClosedSnapshots[0].sessionId, 'closed-tab-1');
 assert.strictEqual(recentlyClosedSnapshots[0].groupKey, 'example.com');
 assert.strictEqual(recentlyClosedSnapshots[0].groupTitle, 'example');
 assert.strictEqual(recentlyClosedSnapshots[0].restoreScope, 'tab');
+assert.strictEqual(recentlyClosedSnapshots[0].closedAt, 1710000000000);
 
 const recentlyClosedWindowSnapshots = backgroundSandbox.buildRecentlyClosedTabSnapshots([
   {
@@ -1535,7 +1538,7 @@ async function assertPopupUnifiedSearchStateContract() {
   const projectResults = popupSandbox.getVisibleTabsFromState(Object.assign({}, localState, {
     query: '项目 A'
   }));
-  assert.deepStrictEqual(Array.from(projectResults, (tab) => tab.id), [203]);
+  assert.deepStrictEqual(Array.from(projectResults, (tab) => tab.id), []);
 
   await popupSandbox.loadCommandShortcuts();
   assert.strictEqual(popupChromeCalls.commandReads, 1);
@@ -1646,85 +1649,178 @@ assert.strictEqual(popupSandbox.getSearchResultGroupLabel({
 assert.strictEqual(typeof popupSandbox.formatRecentAccessTime, 'function');
 assert.strictEqual(popupSandbox.formatRecentAccessTime(Date.now()), '刚刚');
 assert.strictEqual(typeof popupSandbox.getSortHelpText, 'function');
-assert.ok(popupSandbox.getSortHelpText('项目').includes('标题完全匹配 +400'));
-assert.ok(popupSandbox.getSortHelpText('项目').includes('最近 1 分钟 +260'));
+assert.ok(popupSandbox.getSortHelpText('项目').includes('搜索只匹配标签页标题和网址'));
+assert.ok(popupSandbox.getSortHelpText('项目').includes('当前页在同分的已打开结果中排在其他页面之后'));
+assert.ok(!popupSandbox.getSortHelpText('项目').includes('最近 1 分钟'));
 assert.ok(popupSandbox.getSortHelpText('').includes('最近使用按页面最近激活时间排序'));
-const visibleSearchTabs = popupSandbox.getVisibleTabsFromState({
-  query: '项目',
-  tabs: [
-    { id: 1, title: '普通页面', url: 'https://example.com', groupKey: 'example.com', groupTitle: 'example', lastAccessedAt: 1 },
-    { id: 2, title: '项目页面', url: 'https://project.example.com', groupKey: 'custom:项目', groupTitle: '项目', lastAccessedAt: 2 }
-  ]
-});
-assert.deepStrictEqual(Array.from(visibleSearchTabs, (tab) => tab.id), [2]);
-const searchEnhancementTabs = [
+assert.strictEqual(popupSandbox.isCurrentPage({ active: true, isCurrentWindow: true }), true);
+assert.strictEqual(popupSandbox.isCurrentPage({ active: true, isCurrentWindow: false }), false);
+assert.strictEqual(popupSandbox.canCloseSearchResultTab({
+  id: 1,
+  active: true,
+  isCurrentWindow: true
+}), false);
+assert.strictEqual(popupSandbox.canCloseSearchResultTab({
+  id: 2,
+  active: true,
+  isCurrentWindow: false
+}), true);
+assert.strictEqual(popupSandbox.normalizeSearchText('  ＡＢＣ\t　Ｄ  '), 'abc d');
+assert.strictEqual(popupSandbox.getSearchMatchScore({ title: 'ABC', url: '' }, 'ＡＢＣ'), 400);
+assert.strictEqual(
+  popupSandbox.getSearchMatchScore({ title: 'Alpha   Beta Guide', url: '' }, ' alpha　 beta '),
+  300
+);
+
+const sameSearchFields = [
   {
-    id: 11,
-    title: 'GitHub Pull Requests',
-    url: 'https://github.com/acme/tabgod/pulls',
-    groupKey: 'github.com',
-    groupTitle: '研发协作',
-    shortGroupTitle: 'github',
-    isCurrentWindow: true,
-    active: false,
-    index: 0,
-    lastAccessedAt: 1000
+    title: 'Alpha Guide',
+    url: 'https://example.test/alpha',
+    groupKey: 'example.test',
+    groupTitle: '示例',
+    shortGroupTitle: 'example'
   },
   {
-    id: 12,
-    title: 'Issue 详情',
-    url: 'https://github.com/acme/tabgod/issues/12',
-    groupKey: 'github.com',
-    groupTitle: '研发协作',
-    shortGroupTitle: 'github',
-    isCurrentWindow: true,
-    active: false,
-    index: 1,
-    lastAccessedAt: 900
-  },
-  {
-    id: 13,
-    title: 'GitLab 合并请求',
-    url: 'https://gitlab.example.com/acme/tabgod/-/merge_requests',
-    groupKey: 'gitlab.example.com',
-    groupTitle: '代码平台',
-    shortGroupTitle: 'gitlab',
-    isCurrentWindow: true,
-    active: false,
-    index: 2,
-    lastAccessedAt: 800
+    title: 'Alpha Guide',
+    url: 'https://example.test/alpha',
+    groupKey: 'custom:项目 A',
+    groupTitle: '项目 A',
+    shortGroupTitle: '项目'
   }
 ];
-const multiKeywordResults = popupSandbox.getVisibleTabsFromState({
-  query: 'github issue',
-  tabs: searchEnhancementTabs,
-  recentlyClosedTabs: []
-});
-assert.deepStrictEqual(Array.from(multiKeywordResults, (tab) => tab.id), [12]);
+for (const query of ['alpha', 'example.test', '项目 A', 'custom']) {
+  assert.strictEqual(
+    popupSandbox.getSearchMatchScore(sameSearchFields[0], query),
+    popupSandbox.getSearchMatchScore(sameSearchFields[1], query)
+  );
+}
+assert.strictEqual(popupSandbox.getSearchMatchScore({
+  title: '普通页面',
+  url: 'https://example.test/home',
+  groupKey: 'custom:项目 A',
+  groupTitle: '项目 A',
+  shortGroupTitle: '项目'
+}, '项目 A'), 0);
+assert.strictEqual(popupSandbox.getSearchMatchScore({
+  title: '普通页面',
+  url: 'https://example.test/home',
+  groupKey: 'custom:项目 A',
+  groupTitle: '项目 A',
+  shortGroupTitle: '项目'
+}, 'custom'), 0);
+assert.strictEqual(popupSandbox.getSearchMatchScore({
+  title: '代码仓库',
+  url: 'https://github.com/acme/tabgod',
+  groupKey: 'custom:项目 A',
+  groupTitle: '项目 A'
+}, 'github.com'), 100);
+
+const singleSearchScoreCases = [
+  ['标题完全匹配', { title: 'Alpha', url: 'https://example.test' }, 'alpha', 400],
+  ['标题连续包含', { title: 'Alpha Guide', url: 'https://example.test' }, 'alpha', 300],
+  ['网址连续包含', { title: '普通页面', url: 'https://example.test/alpha' }, 'alpha', 100],
+  ['标题三字符子序列', { title: 'GitHub Pull Requests', url: 'https://example.test/item' }, 'gpr', 60],
+  ['网址三字符子序列', { title: '普通页面', url: 'https://google.com' }, 'ggl', 40],
+  ['标题两字符子序列', { title: 'GitHub Pull Requests', url: 'https://example.test/item' }, 'gh', 0],
+  ['标题词首两字符', { title: 'GitHub Pull Requests', url: 'https://example.test/item' }, 'pr', 0],
+  ['网址两字符子序列', { title: '普通页面', url: 'https://google.com' }, 'hg', 0]
+];
+for (const [name, tab, query, expectedScore] of singleSearchScoreCases) {
+  assert.strictEqual(popupSandbox.getSearchMatchScore(tab, query), expectedScore, name);
+}
+const weakTitleTab = { title: 'GitHub Pull Requests', url: 'https://example.test/item' };
+const strongerUrlTab = { title: weakTitleTab.title, url: 'https://example.test/gpr' };
+assert.strictEqual(popupSandbox.getSearchMatchScore(weakTitleTab, 'gpr'), 60);
+assert.strictEqual(popupSandbox.getSearchMatchScore(strongerUrlTab, 'gpr'), 100);
+
+const multiSearchScoreCases = [
+  ['两个标题词', { title: 'Alpha guide for Beta', url: 'https://example.test' }, 'alpha beta', 280],
+  ['标题完整短语', { title: 'Alpha Beta Guide', url: 'https://example.test' }, 'alpha beta', 300],
+  ['标题完全相等', { title: 'Alpha Beta', url: 'https://example.test' }, 'alpha beta', 400],
+  ['标题词加网址词', { title: 'Alpha Guide', url: 'https://example.test/beta' }, 'alpha beta', 230],
+  ['标题词加标题子序列', { title: 'Alpha GitHub Pull Requests', url: 'https://example.test' }, 'alpha gpr', 220],
+  ['两个网址词', { title: '普通页面', url: 'https://alpha.example.test/path/beta' }, 'alpha beta', 180],
+  ['两个标题子序列', { title: 'GitHub Pull Requests Colorful Xylophone Zebra', url: 'https://example.test' }, 'gpr cxz', 160],
+  ['标题与网址子序列', { title: 'GitHub Pull Requests', url: 'https://google.com' }, 'gpr ggl', 150],
+  ['两个网址子序列', { title: '普通页面', url: 'https://google.test/microsoft' }, 'ggl mct', 140],
+  ['三个混合关键词', { title: 'Alpha GitHub Pull Requests', url: 'https://example.test/beta' }, 'alpha beta gpr', 207],
+  ['缺少一个关键词', { title: 'Alpha Guide', url: 'https://example.test' }, 'alpha beta', 0]
+];
+for (const [name, tab, query, expectedScore] of multiSearchScoreCases) {
+  assert.strictEqual(popupSandbox.getSearchMatchScore(tab, query), expectedScore, name);
+}
+
+assert.ok(!popupStructureJsContent.includes('function getSearchWords'));
+assert.ok(!popupStructureJsContent.includes('function buildAcronymText'));
+assert.ok(!popupStructureJsContent.includes('function getTabSearchText'));
+assert.ok(!popupStructureJsContent.includes('function getRecentMatchScore'));
+assert.ok(!popupStructureJsContent.includes('rankingScore'));
+
+vm.runInContext(`
+  globalThis.searchDateNowCalls = 0;
+  globalThis.originalSearchDate = Date;
+  Date = class SearchDateProbe extends originalSearchDate {
+    static now() {
+      searchDateNowCalls += 1;
+      return 1;
+    }
+  };
+`, popupSandbox);
+try {
+  popupSandbox.getVisibleTabsFromState({
+    query: 'alpha',
+    tabs: [
+      { id: 'date-a', title: 'Alpha', url: '', lastAccessedAt: 1 },
+      { id: 'date-b', title: 'Alpha', url: '', lastAccessedAt: 2 }
+    ],
+    recentlyClosedTabs: []
+  });
+  assert.strictEqual(popupSandbox.searchDateNowCalls, 0);
+} finally {
+  vm.runInContext('Date = originalSearchDate;', popupSandbox);
+}
+
 vm.runInContext(`
   globalThis.searchScoreCallCounts = new Map();
+  globalThis.searchFieldCallCounts = new Map();
   globalThis.originalSearchMatchScore = getSearchMatchScore;
+  globalThis.originalSearchFieldParts = getSearchFieldParts;
   getSearchMatchScore = function (tab, query) {
     const key = String(tab.id);
     searchScoreCallCounts.set(key, (searchScoreCallCounts.get(key) || 0) + 1);
     return originalSearchMatchScore(tab, query);
   };
+  getSearchFieldParts = function (tab) {
+    const key = String(tab.id);
+    searchFieldCallCounts.set(key, (searchFieldCallCounts.get(key) || 0) + 1);
+    return originalSearchFieldParts(tab);
+  };
 `, popupSandbox);
 popupSandbox.getVisibleTabsFromState({
-  query: 'gh',
-  tabs: searchEnhancementTabs,
+  query: 'alpha',
+  tabs: [
+    { id: 11, title: 'Alpha', url: 'https://example.test/1', active: true, isCurrentWindow: true },
+    { id: 12, title: 'Alpha Guide', url: 'https://example.test/2' },
+    { id: 13, title: '普通页面', url: 'https://example.test/alpha' }
+  ],
   recentlyClosedTabs: [{
-    id: 'closed-gh',
-    title: 'GitHub 已关闭页面',
-    url: 'https://github.com/acme/closed',
-    groupKey: 'github.com',
-    lastAccessedAt: 0,
+    id: 'closed-alpha',
+    title: 'Alpha 已关闭页面',
+    url: 'https://example.test/closed',
+    closedAt: 1,
     resultType: 'recentlyClosed'
   }]
 });
 assert.strictEqual(popupSandbox.searchScoreCallCounts.size, 4);
 assert.ok(Array.from(popupSandbox.searchScoreCallCounts.values()).every((count) => count === 1));
-vm.runInContext('getSearchMatchScore = originalSearchMatchScore;', popupSandbox);
+assert.strictEqual(popupSandbox.searchFieldCallCounts.size, 4);
+assert.ok(Array.from(popupSandbox.searchFieldCallCounts.values()).every((count) => count === 1));
+assert.strictEqual(popupSandbox.searchScoreCallCounts.get('11'), 1);
+assert.strictEqual(popupSandbox.searchFieldCallCounts.get('11'), 1);
+vm.runInContext(`
+  getSearchMatchScore = originalSearchMatchScore;
+  getSearchFieldParts = originalSearchFieldParts;
+`, popupSandbox);
 
 const navigationItems = Array.from({ length: 3 }, () => ({
   classList: { add() {}, remove() {} },
@@ -1758,19 +1854,6 @@ vm.runInContext(`
   renderTabs = originalRenderTabsForNavigation;
 `, popupSandbox);
 searchResultList.querySelectorAll = originalResultQuerySelectorAll;
-assert.ok(
-  popupSandbox.getSearchMatchScore(searchEnhancementTabs[0], 'gpr') > 0,
-  '标题首字母缩写应能命中 GitHub Pull Requests'
-);
-assert.ok(
-  popupSandbox.getSearchMatchScore(searchEnhancementTabs[0], 'gh pr') > 0,
-  '站点缩写和标题关键词组合应能命中 GitHub Pull Requests'
-);
-assert.ok(
-  popupSandbox.getSearchMatchScore(searchEnhancementTabs[2], 'gh pr')
-    < popupSandbox.getSearchMatchScore(searchEnhancementTabs[0], 'gh pr'),
-  '缩写匹配不能压过更明确的站点和标题组合命中'
-);
 const visibleRecentTabs = popupSandbox.getVisibleTabsFromState({
   query: '',
   tabs: [
@@ -1779,30 +1862,226 @@ const visibleRecentTabs = popupSandbox.getVisibleTabsFromState({
   ]
 });
 assert.deepStrictEqual(Array.from(visibleRecentTabs, (tab) => tab.id), [4]);
-const nowForSearchRank = Date.now();
-const recentRankedResults = popupSandbox.getVisibleTabsFromState({
-  query: 'ex',
-  tabs: [
-    {
-      id: 5,
-      title: '扩展程序',
-      url: 'chrome://extensions/',
-      groupKey: '其他',
-      groupTitle: '其他',
-      lastAccessedAt: nowForSearchRank
-    },
-    {
-      id: 6,
-      title: 'Nexus Repository Manager',
-      url: 'https://nexus.ddxq.mobi/#browse/search=keyword%3Dplan-base-data-client',
-      groupKey: 'ddxq.mobi',
-      groupTitle: 'ddxq',
-      lastAccessedAt: nowForSearchRank - (2 * 60 * 60 * 1000)
-    }
-  ],
-  recentlyClosedTabs: []
+
+function getSearchResultIds(query, tabs, recentlyClosedTabs = []) {
+  return Array.from(popupSandbox.getVisibleTabsFromState({ query, tabs, recentlyClosedTabs }), (tab) => tab.id);
+}
+
+assert.deepStrictEqual(getSearchResultIds('gpr', [
+  { id: 'exact', title: 'GPR', url: 'https://example.test', lastAccessedAt: 1 },
+  { id: 'contains', title: 'GPR Guide', url: 'https://example.test', lastAccessedAt: 2 },
+  { id: 'url', title: '普通页面', url: 'https://example.test/gpr', lastAccessedAt: 3 },
+  { id: 'weak', title: 'GitHub Pull Requests', url: 'https://example.test', lastAccessedAt: 4 }
+]), ['exact', 'contains', 'url', 'weak']);
+assert.deepStrictEqual(getSearchResultIds('alpha', [
+  { id: 'current-exact', title: 'Alpha', url: '', active: true, isCurrentWindow: true, lastAccessedAt: 1 },
+  { id: 'other-contains', title: 'Alpha Guide', url: '', active: false, isCurrentWindow: true, lastAccessedAt: 999 }
+]), ['current-exact', 'other-contains']);
+assert.deepStrictEqual(getSearchResultIds('alpha', [
+  { id: 'current', title: 'Alpha', url: '', active: true, isCurrentWindow: true, lastAccessedAt: 999 },
+  { id: 'other', title: 'Alpha', url: '', active: false, isCurrentWindow: true, lastAccessedAt: 1 }
+]), ['other', 'current']);
+assert.deepStrictEqual(getSearchResultIds('alpha', [
+  { id: 'current', title: 'Alpha', url: '', active: true, isCurrentWindow: true, lastAccessedAt: 1 }
+], [
+  { id: 'closed', title: 'Alpha', url: '', resultType: 'recentlyClosed', closedAt: 999 }
+]), ['current', 'closed']);
+assert.deepStrictEqual(getSearchResultIds('alpha', [
+  { id: 'current', title: 'Alpha Guide', url: '', active: true, isCurrentWindow: true, lastAccessedAt: 999 }
+], [
+  { id: 'closed', title: 'Alpha', url: '', resultType: 'recentlyClosed', closedAt: 1 }
+]), ['closed', 'current']);
+assert.deepStrictEqual(getSearchResultIds('alpha', [
+  { id: 'other-window-active', title: 'Alpha', url: '', active: true, isCurrentWindow: false, lastAccessedAt: 200 },
+  { id: 'current-window-other', title: 'Alpha', url: '', active: false, isCurrentWindow: true, lastAccessedAt: 100 }
+]), ['other-window-active', 'current-window-other']);
+assert.deepStrictEqual(getSearchResultIds('alpha', [
+  { id: 'open', title: 'Alpha', url: '', lastAccessedAt: 1 }
+], [
+  { id: 'closed', title: 'Alpha', url: '', resultType: 'recentlyClosed', closedAt: 999 }
+]), ['open', 'closed']);
+assert.deepStrictEqual(getSearchResultIds('alpha', [
+  { id: 'open', title: 'Alpha Guide', url: '', lastAccessedAt: 999 }
+], [
+  { id: 'closed', title: 'Alpha', url: '', resultType: 'recentlyClosed', closedAt: 1 }
+]), ['closed', 'open']);
+assert.deepStrictEqual(getSearchResultIds('alpha', [], [
+  { id: 'closed-old', title: 'Alpha', url: '', resultType: 'recentlyClosed', closedAt: 100, lastAccessedAt: 999 },
+  { id: 'closed-new', title: 'Alpha', url: '', resultType: 'recentlyClosed', closedAt: 200, lastAccessedAt: 1 }
+]), ['closed-new', 'closed-old']);
+assert.deepStrictEqual(getSearchResultIds('alpha', [
+  { id: 'open-old', title: 'Alpha', url: '', lastAccessedAt: 100 },
+  { id: 'open-new', title: 'Alpha', url: '', lastAccessedAt: 200 }
+]), ['open-new', 'open-old']);
+assert.deepStrictEqual(getSearchResultIds('alpha', [
+  { id: 20, title: 'Alpha', url: '', isCurrentWindow: false, index: 0, lastAccessedAt: 100 },
+  { id: 30, title: 'Alpha', url: '', isCurrentWindow: true, index: 2, lastAccessedAt: 100 },
+  { id: 11, title: 'Alpha', url: '', isCurrentWindow: true, index: 1, lastAccessedAt: 100 },
+  { id: 10, title: 'Alpha', url: '', isCurrentWindow: true, index: 1, lastAccessedAt: 100 }
+]), [10, 11, 30, 20]);
+assert.deepStrictEqual(getSearchResultIds('alpha', [
+  { id: 'missing', title: 'Alpha', url: '', index: 0 },
+  { id: 'negative', title: 'Alpha', url: '', index: 1, lastAccessedAt: -1 },
+  { id: 'nan', title: 'Alpha', url: '', index: 2, lastAccessedAt: Number.NaN },
+  { id: 'infinity', title: 'Alpha', url: '', index: 3, lastAccessedAt: Number.POSITIVE_INFINITY }
+]), ['missing', 'negative', 'nan', 'infinity']);
+const duplicateUrlResults = popupSandbox.getVisibleTabsFromState({
+  query: 'alpha',
+  tabs: [{ id: 'open', title: 'Alpha', url: 'https://example.test/same', lastAccessedAt: 1 }],
+  recentlyClosedTabs: [{
+    id: 'closed',
+    title: 'Alpha',
+    url: 'https://example.test/same',
+    resultType: 'recentlyClosed',
+    closedAt: 2
+  }]
 });
-assert.deepStrictEqual(Array.from(recentRankedResults, (tab) => tab.id), [5, 6]);
+assert.deepStrictEqual(Array.from(duplicateUrlResults, (tab) => tab.id), ['open', 'closed']);
+
+const originalPopupCreateElement = popupSandbox.document.createElement;
+const originalSearchResultAppendChild = searchResultList.appendChild;
+const originalSearchResultQuerySelector = searchResultList.querySelector;
+const renderedPopupElements = [];
+searchResultList.children = [];
+searchResultList.appendChild = (element) => searchResultList.children.push(element);
+searchResultList.querySelector = () => null;
+popupSandbox.document.createElement = (tagName) => {
+  const element = createPopupTestElement();
+  element.tagName = tagName;
+  element.children = [];
+  element.listeners = {};
+  element.appendChild = (child) => element.children.push(child);
+  element.addEventListener = (type, listener) => {
+    element.listeners[type] = listener;
+  };
+  renderedPopupElements.push(element);
+  return element;
+};
+const closedRenderTime = Date.now();
+vm.runInContext(`
+  state.query = 'alpha';
+  state.tabs = [{
+    id: 41,
+    title: 'Alpha',
+    url: 'https://example.test/current',
+    groupKey: 'example.test',
+    active: true,
+    isCurrentWindow: true,
+    lastAccessedAt: 1,
+    index: 0
+  }, {
+    id: 42,
+    title: 'Alpha Guide',
+    url: 'https://example.test/other',
+    groupKey: 'example.test',
+    active: false,
+    pinned: false,
+    audible: false,
+    isCurrentWindow: true,
+    lastAccessedAt: 2,
+    index: 1
+  }];
+  state.recentlyClosedTabs = [{
+    id: 'closed-render',
+    sessionId: 'closed-render-session',
+    title: 'Alpha Guide',
+    url: 'https://example.test/closed',
+    groupKey: 'example.test',
+    resultType: 'recentlyClosed',
+    windowLabel: '最近关闭标签',
+    closedAt: ${closedRenderTime},
+    lastAccessedAt: 1,
+    index: 0
+  }];
+  renderTabs();
+`, popupSandbox);
+const renderedOpenButtons = renderedPopupElements.filter((element) => element.className === 'quick-result-open-button');
+const renderedCloseButtons = renderedPopupElements.filter((element) => element.className.includes('quick-result-close-button'));
+const currentPageOpenButton = renderedOpenButtons.find((element) => element.innerHTML.includes('当前页'));
+const recentlyClosedOpenButton = renderedOpenButtons.find((element) => element.innerHTML.includes('最近关闭标签'));
+assert.strictEqual(renderedOpenButtons.length, 3);
+assert.strictEqual(renderedCloseButtons.length, 1);
+assert.strictEqual(renderedCloseButtons[0].textContent, '×');
+assert.strictEqual(typeof renderedCloseButtons[0].listeners.click, 'function');
+assert.ok(currentPageOpenButton);
+assert.ok(recentlyClosedOpenButton.innerHTML.includes('最近关闭标签 · 刚刚'));
+assert.ok(!recentlyClosedOpenButton.innerHTML.includes('更早'));
+popupSandbox.document.createElement = originalPopupCreateElement;
+searchResultList.appendChild = originalSearchResultAppendChild;
+searchResultList.querySelector = originalSearchResultQuerySelector;
+
+async function assertPopupSearchInteractionContract() {
+  const quickStatus = popupSandbox.document.getElementById('quickStatusText');
+  const originalQuickStatusText = quickStatus.textContent;
+
+  vm.runInContext(`
+    globalThis.searchInteractionActions = [];
+    globalThis.searchInteractionMessages = [];
+    globalThis.searchInteractionLoads = 0;
+    globalThis.searchInteractionStatuses = [];
+    globalThis.originalSearchInteractionRunAction = runAction;
+    globalThis.originalSearchInteractionSendMessage = sendMessage;
+    globalThis.originalSearchInteractionLoadState = loadState;
+    globalThis.originalSearchInteractionSetStatus = setStatus;
+    runAction = async function (action, payload) {
+      searchInteractionActions.push({ action, payload });
+      return null;
+    };
+    sendMessage = async function (action, payload) {
+      searchInteractionMessages.push({ action, payload });
+      return {};
+    };
+    loadState = async function () {
+      searchInteractionLoads += 1;
+    };
+    setStatus = function (message) {
+      searchInteractionStatuses.push(message);
+    };
+    state.visibleTabs = [{ id: 41, active: true, isCurrentWindow: true }];
+    state.selectedIndex = 0;
+  `, popupSandbox);
+
+  try {
+    quickStatus.textContent = '等待鼠标响应';
+    await currentPageOpenButton.listeners.click();
+    assert.strictEqual(quickStatus.textContent, '已在当前页');
+    quickStatus.textContent = '等待键盘响应';
+    popupSandbox.handleSearchKeydown({ key: 'Enter', preventDefault() {} });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(quickStatus.textContent, '已在当前页');
+    assert.deepStrictEqual(Array.from(popupSandbox.searchInteractionStatuses), ['已在当前页', '已在当前页']);
+    assert.strictEqual(popupSandbox.searchInteractionActions.length, 0);
+    assert.strictEqual(popupSandbox.searchInteractionMessages.length, 0);
+    assert.strictEqual(popupSandbox.searchInteractionLoads, 0);
+
+    await popupSandbox.openSearchResult({ id: 42, active: true, isCurrentWindow: false });
+    await popupSandbox.openSearchResult({ id: 43, active: false, isCurrentWindow: true });
+    await popupSandbox.openSearchResult({
+      id: 'closed-interaction',
+      resultType: 'recentlyClosed',
+      sessionId: 'closed-interaction-session'
+    });
+    assert.deepStrictEqual(Array.from(popupSandbox.searchInteractionActions, (call) => call.action), [
+      'activate-tab',
+      'activate-tab',
+      'restore-closed-session'
+    ]);
+  } finally {
+    vm.runInContext(`
+      runAction = originalSearchInteractionRunAction;
+      sendMessage = originalSearchInteractionSendMessage;
+      loadState = originalSearchInteractionLoadState;
+      setStatus = originalSearchInteractionSetStatus;
+      state.query = '';
+      state.tabs = [];
+      state.recentlyClosedTabs = [];
+      state.visibleTabs = [];
+      state.selectedIndex = 0;
+    `, popupSandbox);
+    quickStatus.textContent = originalQuickStatusText;
+  }
+}
+
 assert.strictEqual(typeof popupSandbox.formatGroupRuleThresholdText, 'function');
 assert.strictEqual(popupSandbox.formatGroupRuleThresholdText(null, 2), '使用全局阈值：至少 2 个标签');
 assert.strictEqual(popupSandbox.formatGroupRuleThresholdText(1, 2), '规则阈值：至少 1 个标签');
@@ -1870,6 +2149,8 @@ assert.ok(popupHtml.includes('searchInput'));
 assert.ok(popupHtml.includes('searchResultList'));
 assert.ok(popupHtml.includes('sortHelpButton'));
 assert.ok(popupHtml.includes('搜索标签页'));
+assert.ok(popupHtml.includes('placeholder="输入标题或网址"'));
+assert.ok(!popupHtml.includes('placeholder="输入标题、网址或分组名"'));
 assert.ok(popupHtml.includes('快速切换结果'));
 assert.ok(popupHtml.includes('最近使用'));
 assert.ok(popupCssContent.includes('.quick-result-list'));
@@ -1893,8 +2174,15 @@ assert.ok(readmeContent.includes('多个域名'));
 assert.ok(readmeContent.includes('点击“整理当前窗口”'));
 assert.ok(readmeContent.includes('搜索框会自动聚焦'));
 assert.ok(readmeContent.includes('最近使用的已打开页面'));
+assert.ok(readmeContent.includes('普通非连续 ASCII 匹配至少需要三个字符'));
+assert.ok(readmeContent.includes('当前页排在其他已打开页面之后'));
+assert.ok(readmeContent.includes('关闭时间只用于同分排序'));
+assert.ok(!readmeContent.includes('英文标题、分组名和网址片段的首字母缩写'));
 assert.ok(usageSvgContent.includes('一键整理当前窗口'));
 assert.ok(usageSvgContent.includes('搜索已打开标签'));
+assert.ok(usageSvgContent.includes('输入标题或网址'));
+assert.ok(usageSvgContent.includes('仅匹配标签页标题和网址'));
+assert.ok(!usageSvgContent.includes('标题、网址、主域名和自定义分组名'));
 assert.ok(usageSvgContent.includes('最近使用与键盘选择'));
 assert.ok(usageSvgContent.includes('分组规则是核心能力'));
 assert.ok(usageSvgContent.includes('满足全部或满足任一'));
@@ -2535,6 +2823,7 @@ async function assertPopupPerformanceLifecycleContract() {
 
 async function runAsyncChecks() {
   await assertPopupUnifiedSearchStateContract();
+  await assertPopupSearchInteractionContract();
   await assertPopupPerformanceContract();
   await assertPopupPerformanceLifecycleContract();
 

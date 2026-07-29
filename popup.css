@@ -1160,7 +1160,7 @@ kbd {
   background: transparent;
   font-size: 18px;
   line-height: 1;
-  opacity: 0.3;
+  opacity: 1;
   transition: opacity 100ms ease, background-color 100ms ease, border-color 100ms ease, color 100ms ease;
 }
 
@@ -1168,6 +1168,9 @@ kbd {
 .quick-result-item:focus-within .quick-result-close-button,
 .quick-result-item.is-selected .quick-result-close-button {
   opacity: 1;
+  border-color: rgba(220, 38, 38, 0.24);
+  color: #b91c1c;
+  background: rgba(254, 226, 226, 0.72);
 }
 
 .quick-result-close-button:hover,

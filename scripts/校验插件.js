@@ -2093,10 +2093,16 @@ async function assertPopupPerformanceContract() {
       domComplete: 100,
       loadEnd: 110
     };
+    popupPerformance.resources = {
+      'popup.css': { start: 5.04, responseEnd: 18.06, duration: 13.02 },
+      'grouping.js': { start: 6.04, responseEnd: 28.06, duration: 22.02 },
+      'popup.js': { start: 7.04, responseEnd: 48.06, duration: 41.02 }
+    };
     popupPerformance.points = {
       groupingScriptStart: 30,
       groupingScriptEnd: 40,
       scriptStart: 50,
+      popupScriptEnd: 70,
       domContentLoadedHandlerStart: 80,
       windowLoad: 105,
       loadStateStart: 120,
@@ -2128,6 +2134,11 @@ async function assertPopupPerformanceContract() {
   const snapshot = vm.runInContext('capturedPopupPerformanceSnapshot', popupSandbox);
   assert.strictEqual(snapshot.derived.navigationToUsable, 300);
   assert.strictEqual(snapshot.derived.postRenderFcpDelay, 70);
+  assert.strictEqual(snapshot.points.popupScriptEnd, 70);
+  assert.strictEqual(snapshot.resourceEntryCount, null);
+  assert.strictEqual(snapshot.resources['popup.js'].start, 7);
+  assert.strictEqual(snapshot.resources['popup.js'].responseEnd, 48.1);
+  assert.strictEqual(snapshot.resources['popup.js'].duration, 41);
   assert.strictEqual(snapshot.longTasks.count, 1);
   assert.strictEqual(snapshot.longTasks.entries[0].start, 260);
   assert.strictEqual(snapshot.outcome.measurement, 'complete');
@@ -2220,6 +2231,16 @@ function createPopupPerformanceLifecycleHarness(options = {}) {
             domComplete: 35,
             loadEventEnd: 40
           }];
+        }
+        if (type === 'resource') {
+          if (options.resourceTimingFailure) {
+            throw new Error('resource timing failed');
+          }
+          return [
+            { name: 'chrome-extension://test/popup.css', startTime: 2.04, responseEnd: 7.06, duration: 5.02 },
+            { name: 'chrome-extension://test/grouping.js', startTime: 3.04, responseEnd: 8.06, duration: 5.02 },
+            { name: 'chrome-extension://test/popup.js', startTime: 4.04, responseEnd: 9.06, duration: 5.02 }
+          ];
         }
         return [];
       }
@@ -2442,8 +2463,27 @@ async function assertPopupPerformanceLifecycleContract() {
   assert.ok(sample.points.usableReadyToPaint > sample.stages.render.end);
   assert.ok(sample.points.usableReadyToPaint > sample.points.controlsReady);
   assert.ok(sample.points.usablePaintOpportunity > sample.points.usableReadyToPaint);
+  assert.ok(sample.points.popupScriptEnd < sample.points.domContentLoadedHandlerStart);
+  assert.strictEqual(sample.resourceEntryCount, 3);
+  assert.strictEqual(sample.resources['popup.css'].start, 2);
+  assert.strictEqual(sample.resources['popup.css'].responseEnd, 7.1);
+  assert.strictEqual(sample.resources['popup.css'].duration, 5);
+  assert.strictEqual(sample.resources['grouping.js'].start, 3);
+  assert.strictEqual(sample.resources['grouping.js'].responseEnd, 8.1);
+  assert.strictEqual(sample.resources['grouping.js'].duration, 5);
+  assert.strictEqual(sample.resources['popup.js'].start, 4);
+  assert.strictEqual(sample.resources['popup.js'].responseEnd, 9.1);
+  assert.strictEqual(sample.resources['popup.js'].duration, 5);
   assert.strictEqual(sample.navigation.loadEnd, 40);
   assert.strictEqual(sample.outcome.measurement, 'complete');
+
+  const resourceTimingFailure = createPopupPerformanceLifecycleHarness({ resourceTimingFailure: true });
+  await runPopupPerformanceLifecycle(resourceTimingFailure);
+  const resourceTimingFailureSample = resourceTimingFailure
+    .storedState['tabgod.popupPerformanceHistory'].samples[0];
+  assert.strictEqual(resourceTimingFailureSample.resourceEntryCount, null);
+  assert.strictEqual(resourceTimingFailureSample.resources['popup.js'].responseEnd, null);
+  assert.strictEqual(resourceTimingFailureSample.outcome.measurement, 'complete');
 
   const startupFailure = createPopupPerformanceLifecycleHarness({ startupFailure: true });
   await runPopupPerformanceLifecycle(startupFailure);

@@ -32,6 +32,7 @@ const POPUP_PERFORMANCE_STAGE_NAMES = [
   'loadState',
   'duplicateOverview'
 ];
+const POPUP_PERFORMANCE_RESOURCE_NAMES = ['popup.css', 'grouping.js', 'popup.js'];
 
 const popupPerformance = {
   enabled: Number.isFinite(POPUP_SCRIPT_START),
@@ -52,6 +53,8 @@ const popupPerformance = {
   paintObserver: null,
   longTaskObserver: null,
   navigation: null,
+  resourceEntryCount: null,
+  resources: Object.fromEntries(POPUP_PERFORMANCE_RESOURCE_NAMES.map((name) => [name, null])),
   points: {
     groupingScriptStart: Number.isFinite(POPUP_GROUPING_PERFORMANCE.start)
       ? POPUP_GROUPING_PERFORMANCE.start
@@ -333,6 +336,35 @@ function capturePopupNavigationTiming() {
   }
 }
 
+// 当前 Chromium 扩展弹窗实测不暴露 Resource Timing 条目；保留计数以识别未来浏览器行为变化。
+function capturePopupResourceTimings() {
+  popupPerformance.resourceEntryCount = null;
+  popupPerformance.resources = Object.fromEntries(
+    POPUP_PERFORMANCE_RESOURCE_NAMES.map((name) => [name, null])
+  );
+
+  try {
+    const entries = typeof performance.getEntriesByType === 'function'
+      ? performance.getEntriesByType('resource')
+      : [];
+    popupPerformance.resourceEntryCount = entries.length;
+
+    POPUP_PERFORMANCE_RESOURCE_NAMES.forEach((name) => {
+      const entry = entries.find((item) => String(item && item.name || '').endsWith(`/${name}`));
+
+      if (entry) {
+        popupPerformance.resources[name] = {
+          start: Number.isFinite(entry.startTime) ? entry.startTime : null,
+          responseEnd: Number.isFinite(entry.responseEnd) ? entry.responseEnd : null,
+          duration: Number.isFinite(entry.duration) ? entry.duration : null
+        };
+      }
+    });
+  } catch (error) {
+    // 资源计时缺失不影响既有启动样本。
+  }
+}
+
 function schedulePopupUsableFrames() {
   if (
     !popupPerformance.enabled
@@ -431,6 +463,7 @@ function buildPopupPerformanceSnapshot(navigationToUsable) {
     groupingScriptStart: roundPopupPerformanceNumber(popupPerformance.points.groupingScriptStart),
     groupingScriptEnd: roundPopupPerformanceNumber(popupPerformance.points.groupingScriptEnd),
     scriptStart: roundPopupPerformanceNumber(popupPerformance.points.scriptStart),
+    popupScriptEnd: roundPopupPerformanceNumber(popupPerformance.points.popupScriptEnd),
     domContentLoadedHandlerStart: roundPopupPerformanceNumber(popupPerformance.points.domContentLoadedHandlerStart),
     windowLoad: roundPopupPerformanceNumber(popupPerformance.points.windowLoad),
     loadStateStart: roundPopupPerformanceNumber(popupPerformance.points.loadStateStart),
@@ -441,6 +474,14 @@ function buildPopupPerformanceSnapshot(navigationToUsable) {
     firstPaint: roundPopupPerformanceNumber(popupPerformance.points.firstPaint),
     firstContentfulPaint: roundPopupPerformanceNumber(popupPerformance.points.firstContentfulPaint)
   };
+  const resources = Object.fromEntries(POPUP_PERFORMANCE_RESOURCE_NAMES.map((name) => {
+    const resource = popupPerformance.resources[name] || {};
+    return [name, {
+      start: roundPopupPerformanceNumber(resource.start),
+      responseEnd: roundPopupPerformanceNumber(resource.responseEnd),
+      duration: roundPopupPerformanceNumber(resource.duration)
+    }];
+  }));
   const eligibleLongTasks = popupPerformance.longTasks.filter((entry) => {
     return Number.isFinite(rawPoints.scriptStart)
       && entry.start >= rawPoints.scriptStart
@@ -454,6 +495,7 @@ function buildPopupPerformanceSnapshot(navigationToUsable) {
     points.groupingScriptStart,
     points.groupingScriptEnd,
     points.scriptStart,
+    points.popupScriptEnd,
     points.domContentLoadedHandlerStart,
     points.windowLoad,
     points.loadStateStart,
@@ -482,6 +524,10 @@ function buildPopupPerformanceSnapshot(navigationToUsable) {
     },
     visibility: typeof document.visibilityState === 'string' ? document.visibilityState : null,
     navigation,
+    resourceEntryCount: Number.isFinite(popupPerformance.resourceEntryCount)
+      ? popupPerformance.resourceEntryCount
+      : null,
+    resources,
     points,
     context: {
       currentTabCount: Number.isFinite(popupPerformance.context.currentTabCount)
@@ -740,6 +786,7 @@ if (
     recordPopupPerformancePoint('windowLoad');
     window.setTimeout(() => {
       capturePopupNavigationTiming();
+      capturePopupResourceTimings();
       popupPerformance.loadEventSettled = true;
       tryFreezePopupPerformanceSample();
     }, 0);
@@ -3437,3 +3484,5 @@ function escapeHtml(value) {
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
 }
+
+recordPopupPerformancePoint('popupScriptEnd');

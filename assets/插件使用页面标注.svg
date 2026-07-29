@@ -41,7 +41,7 @@
 
     <text x="16" y="116" class="label">搜索已打开标签</text>
     <rect x="16" y="128" width="388" height="36" rx="8" fill="#ffffff" stroke="#d8dee9"/>
-    <text x="28" y="151" class="small">输入标题、网址或分组名</text>
+    <text x="28" y="151" class="small">输入标题或网址</text>
     <text x="16" y="184" class="tiny">点击打开</text>
     <circle cx="82" cy="180" r="2" fill="#c2cad8"/>
     <rect x="94" y="171" width="38" height="18" rx="5" fill="#f8fafd" stroke="#c2cad8"/>
@@ -108,8 +108,8 @@
     <circle cx="548" cy="144" r="17" fill="#0f766e"/>
     <text x="543" y="150" class="num">1</text>
     <text x="578" y="176" class="callout-title">搜索已打开标签</text>
-    <text x="578" y="206" class="callout-body">标题、网址、主域名和自定义分组名</text>
-    <text x="578" y="230" class="callout-body">都能匹配，打开弹窗即可输入。</text>
+    <text x="578" y="206" class="callout-body">仅匹配标签页标题和网址，多关键词需</text>
+    <text x="578" y="230" class="callout-body">全部命中，并优先展示文本质量高者。</text>
 
     <path d="M536 316 L456 392" stroke="#0f766e" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
     <rect x="548" y="282" width="430" height="112" rx="14" fill="#ecfdf5" stroke="#99d8cf"/>

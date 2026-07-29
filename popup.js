@@ -1447,12 +1447,23 @@ async function openSearchResult(result) {
     return;
   }
 
+  if (isCurrentPage(result)) {
+    const message = '已在当前页';
+    setStatus(message);
+    document.getElementById('quickStatusText').textContent = message;
+    return;
+  }
+
   if (!Number.isInteger(result.id)) {
     setStatus('目标标签无效');
     return;
   }
 
   await runAction('activate-tab', { tabId: result.id });
+}
+
+function isCurrentPage(tab) {
+  return Boolean(tab && tab.active && tab.isCurrentWindow);
 }
 
 function canCloseSearchResultTab(tab) {
@@ -1465,7 +1476,7 @@ function canCloseSearchResultTab(tab) {
   return resultType === 'open'
     && Number.isInteger(tab.id)
     && tab.pinned !== true
-    && !(tab.isCurrentWindow && tab.active)
+    && !isCurrentPage(tab)
     && tab.audible !== true;
 }
 
@@ -1817,7 +1828,7 @@ function getSortHelpText(query = state.query) {
     return '最近使用按页面最近激活时间排序，当前窗口正在看的页面不会占用列表位置。';
   }
 
-  return '搜索排序按综合分计算：标题完全匹配 +400，标题包含 +300，分组名或主域名包含 +220，网址包含 +100；多关键词需要全部命中，缩写和非连续字符作为低分兜底；最近 1 分钟 +260，10 分钟内 +180，1 小时内 +100。同分时已打开标签优先，再按最近使用或关闭时间排序。';
+  return '搜索只匹配标签页标题和网址，并先按文本匹配质量排序：标题完全匹配最高，标题连续命中优先，网址连续命中次之，至少三个非连续 ASCII 字符只作低分兜底；多关键词需要全部命中，并按每个词的命中质量计分。文本分相同时已打开标签优先，当前页在同分的已打开结果中排在其他页面之后，再按最近使用或关闭时间排序。';
 }
 
 function renderSortHelp() {
@@ -2808,7 +2819,7 @@ function renderTabs() {
 
     tabList.appendChild(createEmptyState(
       state.query ? '没有匹配的标签页' : '当前没有可切换的标签页',
-      state.query ? '可尝试标题、网址、主域名或分组名。' : ''
+      state.query ? '可尝试标题或网址。' : ''
     ));
     return;
   }
@@ -2821,8 +2832,12 @@ function renderTabs() {
     item.dataset.tabId = String(tab.id);
     const groupLabel = getSearchResultGroupLabel(tab);
     const isRecentlyClosed = tab.resultType === 'recentlyClosed';
-    const windowLabel = tab.windowLabel || (tab.isCurrentWindow ? '当前窗口' : '其他窗口');
-    const accessLabel = formatRecentAccessTime(Number(tab.lastAccessedAt) || 0);
+    const windowLabel = isCurrentPage(tab)
+      ? '当前页'
+      : tab.windowLabel || (tab.isCurrentWindow ? '当前窗口' : '其他窗口');
+    const accessLabel = formatRecentAccessTime(normalizeSortTime(
+      isRecentlyClosed ? tab.closedAt : tab.lastAccessedAt
+    ));
     const metaText = accessLabel ? `${windowLabel} · ${accessLabel}` : windowLabel;
     const openButton = document.createElement('button');
     openButton.className = 'quick-result-open-button';
@@ -3039,19 +3054,11 @@ function formatRecentAccessTime(timestamp, now = Date.now()) {
 }
 
 function normalizeSearchText(value) {
-  return String(value || '').trim().toLowerCase();
+  return String(value || '').normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 function getSearchTokens(value) {
   return normalizeSearchText(value).split(/\s+/).filter(Boolean);
-}
-
-function getSearchWords(value) {
-  return normalizeSearchText(value).match(/[a-z0-9\u4e00-\u9fa5]+/g) || [];
-}
-
-function buildAcronymText(value) {
-  return getSearchWords(value).map((word) => word[0]).join('');
 }
 
 function isAsciiToken(value) {
@@ -3059,7 +3066,7 @@ function isAsciiToken(value) {
 }
 
 function isSubsequenceMatch(source, query) {
-  if (!isAsciiToken(query) || query.length < 2) {
+  if (!isAsciiToken(query) || query.length < 3) {
     return false;
   }
 
@@ -3079,32 +3086,10 @@ function isSubsequenceMatch(source, query) {
   return false;
 }
 
-function getTabSearchText(tab) {
-  return [
-    tab.title,
-    tab.url,
-    tab.groupKey,
-    tab.groupTitle,
-    tab.shortGroupTitle
-  ].map(normalizeSearchText).join(' ');
-}
-
 function getSearchFieldParts(tab) {
   return {
     title: normalizeSearchText(tab.title),
-    groupTexts: [
-      tab.groupTitle,
-      tab.groupKey,
-      tab.shortGroupTitle
-    ].map(normalizeSearchText),
-    url: normalizeSearchText(tab.url),
-    acronymText: [
-      tab.title,
-      tab.groupTitle,
-      tab.groupKey,
-      tab.shortGroupTitle,
-      tab.url
-    ].map(buildAcronymText).join(' ')
+    url: normalizeSearchText(tab.url)
   };
 }
 
@@ -3113,40 +3098,19 @@ function getTokenMatchScore(parts, token) {
     return 0;
   }
 
-  if (parts.title.includes(token)) {
-    return 180;
-  }
-
-  if (parts.groupTexts.some((text) => text.includes(token))) {
-    return 140;
-  }
-
-  if (parts.url.includes(token)) {
-    return 80;
-  }
-
-  if (parts.acronymText.split(/\s+/).some((acronym) => acronym.includes(token))) {
-    return 120;
-  }
-
-  if (isSubsequenceMatch(parts.title, token) || parts.groupTexts.some((text) => isSubsequenceMatch(text, token))) {
-    // 弱匹配只用于少打字的兜底，分数刻意低于网址包含，避免短缩写压过明确命中。
-    return 60;
-  }
-
-  if (isSubsequenceMatch(parts.url, token)) {
-    return 40;
-  }
-
-  return 0;
+  return Math.max(
+    parts.title.includes(token) ? 180 : 0,
+    parts.url.includes(token) ? 80 : 0,
+    isSubsequenceMatch(parts.title, token) ? 60 : 0,
+    isSubsequenceMatch(parts.url, token) ? 40 : 0
+  );
 }
 
-function getTokenizedSearchMatchScore(tab, tokens) {
-  if (tokens.length <= 1) {
+function getTokenizedSearchMatchScore(parts, tokens) {
+  if (tokens.length === 0) {
     return 0;
   }
 
-  const parts = getSearchFieldParts(tab);
   let totalScore = 0;
 
   for (const token of tokens) {
@@ -3159,8 +3123,9 @@ function getTokenizedSearchMatchScore(tab, tokens) {
     totalScore += tokenScore;
   }
 
-  // 多关键词匹配比完整标题包含更弱，但应高于单纯网址包含，方便“github issue”这类真实输入。
-  return Math.min(totalScore, 260);
+  return tokens.length === 1
+    ? totalScore
+    : 100 + Math.round(totalScore / tokens.length);
 }
 
 function getSearchMatchScore(tab, query) {
@@ -3172,62 +3137,29 @@ function getSearchMatchScore(tab, query) {
 
   const tokens = getSearchTokens(normalizedQuery);
   const parts = getSearchFieldParts(tab);
+  const phraseScore = Math.max(
+    parts.title === normalizedQuery ? 400 : 0,
+    parts.title.includes(normalizedQuery) ? 300 : 0,
+    parts.url.includes(normalizedQuery) ? 100 : 0
+  );
 
-  if (parts.title === normalizedQuery) {
-    return 400;
-  }
-
-  if (parts.title.includes(normalizedQuery)) {
-    return 300;
-  }
-
-  if (parts.groupTexts.some((text) => text.includes(normalizedQuery))) {
-    return 220;
-  }
-
-  if (parts.url.includes(normalizedQuery)) {
-    return 100;
-  }
-
-  const tokenizedScore = getTokenizedSearchMatchScore(tab, tokens);
-
-  if (tokenizedScore > 0) {
-    return tokenizedScore;
-  }
-
-  return tokens.length === 1 ? getTokenMatchScore(parts, tokens[0]) : 0;
+  return Math.max(phraseScore, getTokenizedSearchMatchScore(parts, tokens));
 }
 
-function getRecentMatchScore(tab, now = Date.now()) {
-  const accessedAt = Number(tab && tab.lastAccessedAt) || 0;
+function normalizeSortTime(value) {
+  const sortTime = Number(value);
+  return Number.isFinite(sortTime) && sortTime > 0 ? sortTime : 0;
+}
 
-  if (!Number.isFinite(accessedAt) || accessedAt <= 0) {
-    return 0;
-  }
-
-  const elapsedMs = Math.max(0, now - accessedAt);
-  const minuteMs = 60 * 1000;
-
-  if (elapsedMs < minuteMs) {
-    // 搜索短词时，刚访问过的页面通常就是用户想切回的页面，需要能压过旧页面的普通标题命中。
-    return 260;
-  }
-
-  if (elapsedMs < 10 * minuteMs) {
-    return 180;
-  }
-
-  if (elapsedMs < 60 * minuteMs) {
-    return 100;
-  }
-
-  // 超过一小时的“最近”不再影响搜索排序，避免旧标签长期压过更精确的匹配。
-  return 0;
+function getSearchSortTime(tab) {
+  return normalizeSortTime(tab && tab.resultType === 'recentlyClosed'
+    ? tab.closedAt
+    : tab && tab.lastAccessedAt);
 }
 
 function compareRecentTabs(left, right) {
-  const leftAccessedAt = Number(left.lastAccessedAt) || 0;
-  const rightAccessedAt = Number(right.lastAccessedAt) || 0;
+  const leftAccessedAt = normalizeSortTime(left.lastAccessedAt);
+  const rightAccessedAt = normalizeSortTime(right.lastAccessedAt);
 
   if (leftAccessedAt !== rightAccessedAt) {
     return rightAccessedAt - leftAccessedAt;
@@ -3243,8 +3175,8 @@ function compareRecentTabs(left, right) {
 function compareSearchTabs(leftRecord, rightRecord) {
   const left = leftRecord.tab;
   const right = rightRecord.tab;
-  const leftScore = leftRecord.rankingScore;
-  const rightScore = rightRecord.rankingScore;
+  const leftScore = leftRecord.matchScore;
+  const rightScore = rightRecord.matchScore;
   const leftType = left.resultType || 'open';
   const rightType = right.resultType || 'open';
 
@@ -3256,10 +3188,20 @@ function compareSearchTabs(leftRecord, rightRecord) {
     return leftType === 'open' ? -1 : 1;
   }
 
-  const recentCompare = compareRecentTabs(left, right);
+  if (leftType === 'open' && isCurrentPage(left) !== isCurrentPage(right)) {
+    return isCurrentPage(left) ? 1 : -1;
+  }
 
-  if (recentCompare !== 0) {
-    return recentCompare;
+  if (leftRecord.sortTime !== rightRecord.sortTime) {
+    return rightRecord.sortTime - leftRecord.sortTime;
+  }
+
+  if (Boolean(left.isCurrentWindow) !== Boolean(right.isCurrentWindow)) {
+    return left.isCurrentWindow ? -1 : 1;
+  }
+
+  if ((left.index || 0) !== (right.index || 0)) {
+    return (left.index || 0) - (right.index || 0);
   }
 
   return String(left.id || '').localeCompare(String(right.id || ''), 'zh-CN');
@@ -3273,7 +3215,7 @@ function getVisibleTabsFromState(sourceState) {
     return tabs
       .filter((tab) => {
         // 最近使用列表用于“切回别的页面”，当前窗口的当前标签继续展示会浪费首屏位置。
-        return !(tab.active && tab.isCurrentWindow);
+        return !isCurrentPage(tab);
       })
       .sort(compareRecentTabs)
       .slice(0, DEFAULT_RECENT_RESULT_LIMIT);
@@ -3281,11 +3223,9 @@ function getVisibleTabsFromState(sourceState) {
 
   const recentlyClosedTabs = Array.isArray(sourceState.recentlyClosedTabs) ? sourceState.recentlyClosedTabs : [];
   const searchPool = [
-    ...tabs.map((tab) => Object.assign({ resultType: 'open' }, tab)),
+    ...tabs.map((tab) => Object.assign({}, tab, { resultType: 'open' })),
     ...recentlyClosedTabs
   ];
-
-  const now = Date.now();
 
   return searchPool
     .map((tab) => {
@@ -3294,10 +3234,10 @@ function getVisibleTabsFromState(sourceState) {
       return {
         tab,
         matchScore,
-        rankingScore: matchScore + getRecentMatchScore(tab, now)
+        sortTime: getSearchSortTime(tab)
       };
     })
-    .filter((record) => record.matchScore > 0 || getTabSearchText(record.tab).includes(query))
+    .filter((record) => record.matchScore > 0)
     .sort(compareSearchTabs)
     .slice(0, SEARCH_RESULT_LIMIT)
     .map((record) => record.tab);

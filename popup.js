@@ -979,14 +979,21 @@ const COMMAND_SHORTCUT_HINTS = [
   {
     commandName: '_execute_action',
     textId: 'openShortcutText',
+    managementTextId: 'managementOpenShortcutText',
     containerId: 'openShortcutHint',
     actionLabel: '打开弹窗'
   },
   {
     commandName: 'organize-tabs',
     textId: 'organizeShortcutText',
+    managementTextId: 'managementOrganizeShortcutText',
     containerId: 'organizeShortcutHint',
     actionLabel: '整理当前窗口'
+  },
+  {
+    commandName: 'save-session',
+    managementTextId: 'managementSaveShortcutText',
+    actionLabel: '保存工作集'
   }
 ];
 
@@ -997,13 +1004,16 @@ function renderCommandShortcut(commandName, shortcutText) {
     return;
   }
 
-  const textElement = document.getElementById(hint.textId);
-  const container = document.getElementById(hint.containerId);
+  const container = hint.containerId ? document.getElementById(hint.containerId) : null;
   const displayText = shortcutText || '未设置';
 
-  if (textElement) {
-    textElement.textContent = displayText;
-  }
+  [hint.textId, hint.managementTextId].filter(Boolean).forEach((textId) => {
+    const textElement = document.getElementById(textId);
+
+    if (textElement) {
+      textElement.textContent = displayText;
+    }
+  });
 
   if (container) {
     container.setAttribute('aria-label', `${hint.actionLabel}快捷键：${displayText}`);
@@ -1299,6 +1309,7 @@ function bindEvents() {
   document.getElementById('copyPerformanceDiagnosticsButton').addEventListener('click', copyPerformanceDiagnostics);
   document.getElementById('clearPerformanceDiagnosticsButton').addEventListener('click', clearPerformanceDiagnostics);
   document.getElementById('moreToolsButton').addEventListener('click', toggleMoreTools);
+  document.getElementById('openShortcutSettingsButton').addEventListener('click', openShortcutSettings);
   document.querySelectorAll('[data-management-panel-button]').forEach((button) => {
     button.addEventListener('click', () => toggleManagementPanel(button.dataset.managementPanelButton));
   });
@@ -1678,6 +1689,14 @@ async function toggleMoreTools() {
   }
 }
 
+async function openShortcutSettings() {
+  try {
+    await chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+  } catch (error) {
+    setStatus('无法打开快捷键设置，请在地址栏输入 chrome://extensions/shortcuts');
+  }
+}
+
 function togglePerformanceDiagnostics() {
   state.performanceDiagnosticsVisible = !state.performanceDiagnosticsVisible;
   renderPerformanceDiagnostics();
@@ -1904,6 +1923,11 @@ function renderManagementOverview() {
   const starredGroupCount = state.groups.filter((group) => group.starred).length;
   const savedTabCount = state.pendingCleanup ? state.pendingCleanup.tabCount : 0;
   const summaries = [
+    {
+      key: 'shortcuts',
+      textId: 'managementShortcutsSummaryText',
+      text: '查看与修改 3 项快捷键'
+    },
     {
       key: 'rules',
       textId: 'managementRulesSummaryText',
@@ -2802,6 +2826,7 @@ function getSelectedDuplicateCloseCount() {
 
 function renderTabs() {
   const tabList = document.getElementById('searchResultList');
+  tabList.classList.toggle('is-searching', Boolean(state.query));
   const visibleTabs = getVisibleTabs();
   state.visibleTabs = visibleTabs;
   const selectedIndex = clampSelectedIndex(state.selectedIndex, visibleTabs.length);

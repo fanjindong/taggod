@@ -104,6 +104,27 @@
       <section id="moreToolsSection" class="more-tools-section is-hidden" aria-label="高级管理" hidden>
         <div class="management-overview" aria-label="高级管理总览">
           <section class="management-summary-item">
+            <button id="managementShortcutsSummary" class="management-summary-button" type="button" data-management-panel-button="shortcuts" aria-expanded="false" aria-controls="managementShortcutsPanel">
+              <span class="management-summary-main">
+                <strong>快捷键</strong>
+                <span id="managementShortcutsSummaryText">查看与修改 3 项快捷键</span>
+              </span>
+              <span class="management-summary-action">设置</span>
+            </button>
+            <section id="managementShortcutsPanel" class="management-panel is-hidden" data-management-panel="shortcuts" aria-label="快捷键" hidden>
+              <div class="shortcut-settings-list">
+                <div><span>打开并搜索</span><kbd id="managementOpenShortcutText">读取中</kbd></div>
+                <div><span>整理当前窗口</span><kbd id="managementOrganizeShortcutText">读取中</kbd></div>
+                <div><span>保存工作集</span><kbd id="managementSaveShortcutText">读取中</kbd></div>
+              </div>
+              <p class="helper-text">快捷键由 Chrome 统一管理，修改后重新打开弹窗即可显示新键位。</p>
+              <div class="inline-actions">
+                <button id="openShortcutSettingsButton" class="compact-button" type="button">修改快捷键</button>
+              </div>
+            </section>
+          </section>
+
+          <section class="management-summary-item">
             <button id="managementRulesSummary" class="management-summary-button" type="button" data-management-panel-button="rules" aria-expanded="false" aria-controls="managementRulesPanel">
               <span class="management-summary-main">
                 <strong>整理规则</strong>

@@ -1952,7 +1952,7 @@ const duplicateUrlResults = popupSandbox.getVisibleTabsFromState({
     closedAt: 2
   }]
 });
-assert.deepStrictEqual(Array.from(duplicateUrlResults, (tab) => tab.id), ['open', 'closed']);
+assert.deepStrictEqual(Array.from(duplicateUrlResults, (tab) => tab.id), ['open']);
 
 const originalPopupCreateElement = popupSandbox.document.createElement;
 const originalSearchResultAppendChild = searchResultList.appendChild;

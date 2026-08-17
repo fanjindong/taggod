@@ -3247,9 +3247,10 @@ function getVisibleTabsFromState(sourceState) {
   }
 
   const recentlyClosedTabs = Array.isArray(sourceState.recentlyClosedTabs) ? sourceState.recentlyClosedTabs : [];
+  const openUrls = new Set(tabs.map((tab) => tab.url).filter(Boolean));
   const searchPool = [
     ...tabs.map((tab) => Object.assign({}, tab, { resultType: 'open' })),
-    ...recentlyClosedTabs
+    ...recentlyClosedTabs.filter((tab) => !openUrls.has(tab.url))
   ];
 
   return searchPool

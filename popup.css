@@ -1091,6 +1091,10 @@ kbd {
   padding-right: 2px;
 }
 
+.quick-result-list.is-searching {
+  max-height: 360px;
+}
+
 .tab-list,
 .session-list,
 .group-list,
@@ -1403,6 +1407,24 @@ button:disabled {
 
 .management-panel .settings-strip {
   margin-top: 0;
+}
+
+.shortcut-settings-list {
+  display: grid;
+  gap: 8px;
+}
+
+.shortcut-settings-list > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  padding: 0 8px;
+  border-radius: 8px;
+  background: #f8fafc;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .settings-strip,

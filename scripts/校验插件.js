@@ -75,6 +75,7 @@ assert.ok(popupStructureHtmlContent.includes('aria-label="高级管理"'));
 assert.ok(popupStructureHtmlContent.includes('>高级管理</button>'));
 assert.ok(!popupStructureHtmlContent.includes('<h2>管理操作</h2>'));
 assert.ok(popupStructureHtmlContent.includes('class="management-overview"'));
+assert.ok(popupStructureHtmlContent.includes('id="managementShortcutsSummary"'));
 assert.ok(popupStructureHtmlContent.includes('id="managementRulesSummary"'));
 assert.ok(popupStructureHtmlContent.includes('id="managementPrioritySummary"'));
 assert.ok(popupStructureHtmlContent.includes('id="managementWorkspaceSummary"'));
@@ -83,14 +84,16 @@ assert.ok(popupStructureHtmlContent.includes('id="managementRulesPanel"'));
 assert.ok(popupStructureHtmlContent.includes('id="managementPriorityPanel"'));
 assert.ok(popupStructureHtmlContent.includes('id="managementWorkspacePanel"'));
 assert.ok(popupStructureHtmlContent.includes('id="managementCleanupPanel"'));
+assert.ok(popupStructureHtmlContent.includes('id="managementShortcutsPanel"'));
+assert.ok(popupStructureHtmlContent.includes('id="openShortcutSettingsButton"'));
 assert.ok(popupStructureHtmlContent.includes('id="performanceDiagnosticsButton"'));
 assert.ok(popupStructureHtmlContent.includes('aria-controls="performanceDiagnosticsSection"'));
 assert.ok(popupStructureHtmlContent.includes('id="copyPerformanceDiagnosticsButton"'));
 assert.ok(popupStructureHtmlContent.includes('id="clearPerformanceDiagnosticsButton"'));
 assert.ok(popupStructureHtmlContent.includes('id="performanceDiagnosticsText"'));
 assert.ok(popupStructureHtmlContent.indexOf('id="performanceDiagnosticsSection"') < popupStructureHtmlContent.indexOf('id="moreToolsSection"'));
-assert.strictEqual((popupStructureHtmlContent.match(/data-management-panel-button="/g) || []).length, 4);
-assert.strictEqual((popupStructureHtmlContent.match(/data-management-panel="/g) || []).length, 4);
+assert.strictEqual((popupStructureHtmlContent.match(/data-management-panel-button="/g) || []).length, 5);
+assert.strictEqual((popupStructureHtmlContent.match(/data-management-panel="/g) || []).length, 5);
 assert.strictEqual((popupStructureHtmlContent.match(/id="scanDuplicatesButton"/g) || []).length, 1);
 assert.strictEqual((popupStructureHtmlContent.match(/id="saveWorkspaceButton"/g) || []).length, 1);
 // 重复清理是当前窗口即时操作，应在首屏常用操作区内确认，避免把用户带到高级管理。
@@ -108,6 +111,7 @@ assert.ok(popupStructureCssContent.includes('.management-panel'));
 assert.ok(popupStructureCssContent.includes('.performance-diagnostics-panel'));
 assert.ok(popupStructureCssContent.includes('.performance-diagnostics-text'));
 assert.ok(popupStructureCssContent.includes('.quick-result-item'));
+assert.match(popupStructureCssContent, /\.quick-result-list\.is-searching\s*\{[^}]*max-height: 360px;/s);
 assert.ok(popupStructureJsContent.includes('quick-result-open-button'));
 assert.ok(popupStructureJsContent.includes('quick-result-action-slot'));
 assert.ok(popupStructureJsContent.includes("document.createElement('article')"));
@@ -177,6 +181,7 @@ assert.match(popupStructureCssContent, /\.quick-result-item\.is-selected \.quick
 assert.ok(popupStructureJsContent.includes('activeManagementPanel'));
 assert.ok(popupStructureJsContent.includes('renderManagementOverview'));
 assert.ok(popupStructureJsContent.includes('chrome.commands.getAll()'));
+assert.ok(popupStructureJsContent.includes("chrome.tabs.create({ url: 'chrome://extensions/shortcuts' })"));
 assert.ok(popupStructureJsContent.includes('chrome.sessions.onChanged.addListener'));
 assert.ok(backgroundStructureJsContent.includes("showCommandBadge('✓'"));
 assert.ok(backgroundStructureJsContent.includes('STORAGE_KEYS.pendingCleanup'));
@@ -199,7 +204,7 @@ assert.ok(readmeStructureContent.includes('最近关闭的标签页'));
 assert.ok(readmeStructureContent.includes('`sessions`'));
 assert.ok(readmeStructureContent.includes('搜索结果里的普通标签页可以直接关闭'));
 assert.ok(readmeStructureContent.includes('固定标签、当前正在看的标签和正在播放声音的标签不会显示关闭入口'));
-assert.ok(readmeStructureContent.includes('实际生效的打开和整理快捷键'));
+assert.ok(readmeStructureContent.includes('实际生效的打开、整理和保存快捷键'));
 assert.ok(readmeStructureContent.includes('一次性会话令牌'));
 assert.ok(readmeStructureContent.includes('`chrome.storage.session`'));
 assert.ok(!readmeStructureContent.includes('“更多工具”里新增自定义分组规则'));
@@ -1311,6 +1316,7 @@ const popupChromeCalls = {
   storageSets: [],
   storageRemoves: [],
   commandReads: 0,
+  createdTabs: [],
   sessionChangedListeners: []
 };
 const popupElements = new Map();
@@ -1417,6 +1423,10 @@ const popupSandbox = {
       }
     },
     tabs: {
+      async create(createProperties) {
+        popupChromeCalls.createdTabs.push(createProperties);
+        return { id: 204, ...createProperties };
+      },
       async query(queryInfo) {
         popupChromeCalls.tabQueries.push(queryInfo);
 
@@ -1544,6 +1554,9 @@ async function assertPopupUnifiedSearchStateContract() {
   assert.strictEqual(popupChromeCalls.commandReads, 1);
   assert.strictEqual(popupElements.get('openShortcutText').textContent, 'Alt+Shift+L');
   assert.strictEqual(popupElements.get('organizeShortcutText').textContent, 'Alt+Shift+Y');
+  assert.strictEqual(popupElements.get('managementOpenShortcutText').textContent, 'Alt+Shift+L');
+  assert.strictEqual(popupElements.get('managementOrganizeShortcutText').textContent, 'Alt+Shift+Y');
+  assert.strictEqual(popupElements.get('managementSaveShortcutText').textContent, '未设置');
   assert.strictEqual(
     popupElements.get('openShortcutHint').attributes['aria-label'],
     '打开弹窗快捷键：Alt+Shift+L'
@@ -1556,6 +1569,9 @@ async function assertPopupUnifiedSearchStateContract() {
   await popupSandbox.loadCommandShortcuts();
   assert.strictEqual(popupElements.get('openShortcutText').textContent, '未设置');
   assert.strictEqual(popupElements.get('organizeShortcutText').textContent, '未设置');
+
+  await popupSandbox.openShortcutSettings();
+  assert.strictEqual(popupChromeCalls.createdTabs.pop().url, 'chrome://extensions/shortcuts');
 
   popupSandbox.bindRecentlyClosedSessionEvents();
   assert.strictEqual(popupChromeCalls.sessionChangedListeners.length, 1);

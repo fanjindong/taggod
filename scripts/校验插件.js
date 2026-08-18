@@ -35,7 +35,7 @@ if (manifest.manifest_version !== 3) {
   throw new Error('manifest.json 必须使用 Manifest V3');
 }
 
-assert.strictEqual(manifest.version, '0.2.4');
+assert.strictEqual(manifest.version, '0.2.5');
 
 if (!manifest.permissions.includes('tabs')
   || !manifest.permissions.includes('tabGroups')
@@ -2634,7 +2634,7 @@ function createPopupPerformanceLifecycleHarness(options = {}) {
     chrome: {
       runtime: {
         getManifest() {
-          return { version: '0.2.4' };
+          return { version: '0.2.5' };
         },
         sendMessage() {
           return Promise.resolve({ ok: true, payload: { duplicateCount: 0 } });

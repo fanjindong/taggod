@@ -11,13 +11,11 @@
       <header class="popup-header">
         <div class="popup-title-block">
           <div class="popup-title-row">
-            <h1>一键整理</h1>
+            <h1>标签之神</h1>
             <span id="openShortcutHint" class="popup-shortcut-pill" aria-label="正在读取打开弹窗快捷键">
-              <span>打开</span>
               <kbd id="openShortcutText">读取中</kbd>
             </span>
           </div>
-          <p id="summaryText">把当前窗口整理成清晰分组</p>
         </div>
       </header>
 
@@ -64,7 +62,7 @@
         <p id="actionStatusText" class="action-status-text" role="status"></p>
         <div class="secondary-action-grid" aria-label="当前窗口辅助操作">
           <button id="scanDuplicatesButton" type="button" title="智能去重会先确认，不会直接关闭。">智能去重</button>
-          <button id="saveWorkspaceButton" type="button">保存工作集</button>
+          <button id="moreToolsButton" class="secondary-management-button" type="button" aria-expanded="false" aria-controls="moreToolsSection">高级管理</button>
         </div>
         <section id="duplicateReviewSection" class="list-section duplicate-review-panel is-hidden" aria-label="重复标签确认" tabindex="-1" hidden>
           <div class="section-title">
@@ -82,27 +80,46 @@
             <button id="cancelDuplicateReviewButton" type="button">取消</button>
           </div>
         </section>
-        <div class="quick-action-footer">
-          <button id="performanceDiagnosticsButton" class="management-toggle-button" type="button" aria-expanded="false" aria-controls="performanceDiagnosticsSection">性能诊断</button>
-          <button id="moreToolsButton" class="management-toggle-button" type="button" aria-expanded="false" aria-controls="moreToolsSection">高级管理</button>
-        </div>
-      </section>
-
-      <section id="performanceDiagnosticsSection" class="performance-diagnostics-panel is-hidden" aria-label="性能诊断" hidden>
-        <div class="section-title">
-          <h2>性能诊断</h2>
-        </div>
-        <p class="helper-text">本机保留最近 20 次弹窗记录，不会自动上传。</p>
-        <p id="performanceDiagnosticsStatus" class="helper-text" role="status">正在采集本次性能记录</p>
-        <div class="inline-actions">
-          <button id="copyPerformanceDiagnosticsButton" type="button">复制性能诊断</button>
-          <button id="clearPerformanceDiagnosticsButton" class="danger-button" type="button">清除性能记录</button>
-        </div>
-        <textarea id="performanceDiagnosticsText" class="performance-diagnostics-text is-hidden" aria-label="性能诊断记录" readonly hidden></textarea>
       </section>
 
       <section id="moreToolsSection" class="more-tools-section is-hidden" aria-label="高级管理" hidden>
         <div class="management-overview" aria-label="高级管理总览">
+          <section class="management-summary-item">
+            <button id="managementAppearanceSummary" class="management-summary-button" type="button" data-management-panel-button="appearance" aria-expanded="false" aria-controls="managementAppearancePanel">
+              <span class="management-summary-main">
+                <strong>外观配色</strong>
+                <span id="managementAppearanceSummaryText">当前：松石青</span>
+              </span>
+              <span class="management-summary-action">切换</span>
+            </button>
+            <section id="managementAppearancePanel" class="management-panel is-hidden" data-management-panel="appearance" aria-label="外观配色" hidden>
+              <fieldset class="color-scheme-picker">
+                <legend>选择配色方案</legend>
+                <label class="color-scheme-option" data-color-scheme-option="teal">
+                  <span class="color-scheme-swatch" aria-hidden="true"></span>
+                  <span><strong>松石青</strong><small>清爽专注</small></span>
+                  <input type="radio" name="colorScheme" value="teal" checked>
+                </label>
+                <label class="color-scheme-option" data-color-scheme-option="navy">
+                  <span class="color-scheme-swatch" aria-hidden="true"></span>
+                  <span><strong>远山蓝</strong><small>稳重专业</small></span>
+                  <input type="radio" name="colorScheme" value="navy">
+                </label>
+                <label class="color-scheme-option" data-color-scheme-option="violet">
+                  <span class="color-scheme-swatch" aria-hidden="true"></span>
+                  <span><strong>暮云紫</strong><small>柔和醒目</small></span>
+                  <input type="radio" name="colorScheme" value="violet">
+                </label>
+                <label class="color-scheme-option" data-color-scheme-option="indigo">
+                  <span class="color-scheme-swatch" aria-hidden="true"></span>
+                  <span><strong>星夜靛</strong><small>沉静清晰</small></span>
+                  <input type="radio" name="colorScheme" value="indigo">
+                </label>
+              </fieldset>
+              <p id="colorSchemeStatus" class="helper-text" role="status"></p>
+            </section>
+          </section>
+
           <section class="management-summary-item">
             <button id="managementShortcutsSummary" class="management-summary-button" type="button" data-management-panel-button="shortcuts" aria-expanded="false" aria-controls="managementShortcutsPanel">
               <span class="management-summary-main">
@@ -224,6 +241,7 @@
               <span class="management-summary-action">查看</span>
             </button>
             <section id="managementWorkspacePanel" class="management-panel is-hidden" data-management-panel="workspace" aria-label="工作集" hidden>
+              <button id="saveWorkspaceButton" class="primary-action management-save-workspace-button" type="button">保存当前窗口为工作集</button>
               <section class="list-section">
                 <div class="section-title">
                   <h2>工作集</h2>
@@ -246,6 +264,21 @@
             </section>
           </section>
         </div>
+        <div class="quick-action-footer">
+          <button id="performanceDiagnosticsButton" class="management-toggle-button" type="button" aria-expanded="false" aria-controls="performanceDiagnosticsSection">性能诊断</button>
+        </div>
+        <section id="performanceDiagnosticsSection" class="performance-diagnostics-panel is-hidden" aria-label="性能诊断" hidden>
+          <div class="section-title">
+            <h2>性能诊断</h2>
+          </div>
+          <p class="helper-text">本机保留最近 20 次弹窗记录，不会自动上传。</p>
+          <p id="performanceDiagnosticsStatus" class="helper-text" role="status">正在采集本次性能记录</p>
+          <div class="inline-actions">
+            <button id="copyPerformanceDiagnosticsButton" type="button">复制性能诊断</button>
+            <button id="clearPerformanceDiagnosticsButton" class="danger-button" type="button">清除性能记录</button>
+          </div>
+          <textarea id="performanceDiagnosticsText" class="performance-diagnostics-text is-hidden" aria-label="性能诊断记录" readonly hidden></textarea>
+        </section>
       </section>
 
       <p id="statusText" class="status-text" role="status"></p>

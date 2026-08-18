@@ -66,6 +66,8 @@ const readmeStructureContent = fs.readFileSync(readmePath, 'utf8');
 
 assert.ok(popupStructureHtmlContent.includes('class="primary-action main-organize-action"'));
 assert.ok(popupStructureHtmlContent.includes('class="secondary-action-grid"'));
+assert.ok(popupStructureHtmlContent.includes('<h1>标签之神</h1>'));
+assert.ok(!popupStructureHtmlContent.includes('id="summaryText"'));
 assert.ok(popupStructureHtmlContent.includes('搜索标签页'));
 assert.ok(popupStructureHtmlContent.includes('id="searchResultList"'));
 assert.ok(popupStructureHtmlContent.includes('id="searchResultList" class="tab-list quick-result-list" tabindex="-1"'));
@@ -75,6 +77,10 @@ assert.ok(popupStructureHtmlContent.includes('aria-label="高级管理"'));
 assert.ok(popupStructureHtmlContent.includes('>高级管理</button>'));
 assert.ok(!popupStructureHtmlContent.includes('<h2>管理操作</h2>'));
 assert.ok(popupStructureHtmlContent.includes('class="management-overview"'));
+assert.ok(popupStructureHtmlContent.includes('id="managementAppearanceSummary"'));
+assert.ok(popupStructureHtmlContent.includes('id="managementAppearancePanel"'));
+assert.ok(popupStructureHtmlContent.includes('id="colorSchemeStatus"'));
+assert.strictEqual((popupStructureHtmlContent.match(/name="colorScheme"/g) || []).length, 4);
 assert.ok(popupStructureHtmlContent.includes('id="managementShortcutsSummary"'));
 assert.ok(popupStructureHtmlContent.includes('id="managementRulesSummary"'));
 assert.ok(popupStructureHtmlContent.includes('id="managementPrioritySummary"'));
@@ -91,11 +97,12 @@ assert.ok(popupStructureHtmlContent.includes('aria-controls="performanceDiagnost
 assert.ok(popupStructureHtmlContent.includes('id="copyPerformanceDiagnosticsButton"'));
 assert.ok(popupStructureHtmlContent.includes('id="clearPerformanceDiagnosticsButton"'));
 assert.ok(popupStructureHtmlContent.includes('id="performanceDiagnosticsText"'));
-assert.ok(popupStructureHtmlContent.indexOf('id="performanceDiagnosticsSection"') < popupStructureHtmlContent.indexOf('id="moreToolsSection"'));
-assert.strictEqual((popupStructureHtmlContent.match(/data-management-panel-button="/g) || []).length, 5);
-assert.strictEqual((popupStructureHtmlContent.match(/data-management-panel="/g) || []).length, 5);
+assert.ok(popupStructureHtmlContent.indexOf('id="performanceDiagnosticsSection"') > popupStructureHtmlContent.indexOf('id="moreToolsSection"'));
+assert.strictEqual((popupStructureHtmlContent.match(/data-management-panel-button="/g) || []).length, 6);
+assert.strictEqual((popupStructureHtmlContent.match(/data-management-panel="/g) || []).length, 6);
 assert.strictEqual((popupStructureHtmlContent.match(/id="scanDuplicatesButton"/g) || []).length, 1);
 assert.strictEqual((popupStructureHtmlContent.match(/id="saveWorkspaceButton"/g) || []).length, 1);
+assert.ok(popupStructureHtmlContent.indexOf('id="saveWorkspaceButton"') > popupStructureHtmlContent.indexOf('id="managementWorkspacePanel"'));
 // 重复清理是当前窗口即时操作，应在首屏常用操作区内确认，避免把用户带到高级管理。
 assert.ok(popupStructureHtmlContent.indexOf('id="duplicateReviewSection"') > popupStructureHtmlContent.indexOf('class="quick-action-area"'));
 assert.ok(popupStructureHtmlContent.indexOf('id="duplicateReviewSection"') < popupStructureHtmlContent.indexOf('id="moreToolsSection"'));
@@ -111,7 +118,20 @@ assert.ok(popupStructureCssContent.includes('.management-panel'));
 assert.ok(popupStructureCssContent.includes('.performance-diagnostics-panel'));
 assert.ok(popupStructureCssContent.includes('.performance-diagnostics-text'));
 assert.ok(popupStructureCssContent.includes('.quick-result-item'));
+assert.ok(popupStructureCssContent.includes('--primary: #0f766e;'));
+assert.ok(popupStructureCssContent.includes(':root[data-color-scheme="navy"]'));
+assert.ok(popupStructureCssContent.includes(':root[data-color-scheme="violet"]'));
+assert.ok(popupStructureCssContent.includes(':root[data-color-scheme="indigo"]'));
+assert.ok(popupStructureCssContent.includes('--primary-ring: var(--primary);'));
+assert.match(popupStructureCssContent, /button:active\s*{[^}]*background: var\(--primary-line\);/s);
+assert.match(popupStructureCssContent, /\.primary-action:active\s*{[^}]*background: var\(--primary-strong\);/s);
+assert.match(popupStructureCssContent, /\.danger-button:active\s*{[^}]*background: #ffeceb;/s);
+assert.ok(popupStructureCssContent.includes('.color-scheme-option:has(input:checked)'));
+assert.match(popupStructureCssContent, /\.popup-shell\s*\{[^}]*border-top: 3px solid var\(--primary\);/s);
+assert.match(popupStructureCssContent, /\.quick-result-list\s*\{[^}]*max-height: 190px;/s);
 assert.match(popupStructureCssContent, /\.quick-result-list\.is-searching\s*\{[^}]*max-height: 360px;/s);
+assert.ok(popupStructureCssContent.includes('.popup-shell:has(.quick-result-list.is-searching) .quick-action-area'));
+assert.ok(popupStructureCssContent.includes('.popup-shell:has(.quick-result-list.is-searching) .more-tools-section'));
 assert.ok(popupStructureJsContent.includes('quick-result-open-button'));
 assert.ok(popupStructureJsContent.includes('quick-result-action-slot'));
 assert.ok(popupStructureJsContent.includes("document.createElement('article')"));
@@ -176,8 +196,8 @@ assert.ok(popupStructureJsContent.includes('item.appendChild(closeButton)'));
 assert.ok(!popupStructureJsContent.includes('actionSlot.appendChild(closeButton)'));
 assert.ok(popupStructureCssContent.includes('.quick-result-close-button'));
 assert.ok(popupStructureCssContent.includes('.quick-result-close-button:focus-visible'));
-assert.match(popupStructureCssContent, /\.quick-result-close-button\s*\{[^}]*opacity: 1;/s);
-assert.match(popupStructureCssContent, /\.quick-result-item\.is-selected \.quick-result-close-button\s*\{[^}]*color: #b91c1c;/s);
+assert.match(popupStructureCssContent, /\.quick-result-close-button\s*\{[^}]*opacity: 0\.78;/s);
+assert.match(popupStructureCssContent, /\.quick-result-item\.is-selected \.quick-result-close-button[^}]*\{[^}]*opacity: 1;/s);
 assert.ok(popupStructureJsContent.includes('activeManagementPanel'));
 assert.ok(popupStructureJsContent.includes('renderManagementOverview'));
 assert.ok(popupStructureJsContent.includes('chrome.commands.getAll()'));
@@ -187,10 +207,12 @@ assert.ok(backgroundStructureJsContent.includes("showCommandBadge('✓'"));
 assert.ok(backgroundStructureJsContent.includes('STORAGE_KEYS.pendingCleanup'));
 // 首屏常用操作必须避免空状态文本占位，否则整理按钮和辅助操作之间会出现无意义留白。
 assert.ok(popupStructureCssContent.includes('.action-status-text:empty'));
+assert.ok(popupStructureCssContent.includes('.status-text:empty'));
+assert.ok(!popupStructureJsContent.includes("setStatus('已加载标签页')"));
 // 弹窗主体不能拉伸自动网格行，否则可用高度增加时会把各模块之间的间距放大。
 assert.match(popupStructureCssContent, /\.popup-shell\s*\{[^}]*align-content: start;[^}]*min-height: auto;/s);
 // 标题区是弹窗入口信息，不应该用大卡片高度挤占高频操作的可见空间。
-assert.match(popupStructureCssContent, /\.popup-header\s*\{\s*align-items: flex-start;\s*padding: 10px 12px;/);
+assert.match(popupStructureCssContent, /\.popup-header\s*\{\s*align-items: flex-start;\s*padding: 2px 2px 0;[^}]*border: 0;[^}]*box-shadow: none;/s);
 // 弹窗滚动容器很短，按钮和列表项不应使用位移或阴影过渡，否则滚动和点击会显得卡顿。
 assert.ok(!popupStructureCssContent.includes('transform 160ms'));
 assert.ok(!popupStructureCssContent.includes('box-shadow 160ms'));
@@ -1369,6 +1391,9 @@ const popupSandbox = {
   console,
   URL,
   document: {
+    documentElement: {
+      dataset: {}
+    },
     addEventListener() {},
     getElementById(id) {
       if (!popupElements.has(id)) {
@@ -1445,7 +1470,8 @@ const popupSandbox = {
           popupChromeCalls.storageGets.push(keys);
           const stored = Object.assign({
             'tabgod.settings': popupUnifiedSearchSettings,
-            'tabgod.recentAccess': { 202: 400, 203: 300 }
+            'tabgod.recentAccess': { 202: 400, 203: 300 },
+            'tabgod.colorScheme': 'violet'
           }, popupPerformanceStoredState);
           return keys.reduce((result, key) => {
             if (Object.prototype.hasOwnProperty.call(stored, key)) {
@@ -1527,6 +1553,25 @@ async function assertPopupUnifiedSearchStateContract() {
   popupChromeCalls.tabQueries.length = 0;
   popupChromeCalls.storageGets.length = 0;
 
+  const queryTabs = popupSandbox.chrome.tabs.query.bind(popupSandbox.chrome.tabs);
+  let releaseTabQueries;
+  const tabQueriesReady = new Promise((resolve) => {
+    releaseTabQueries = resolve;
+  });
+  popupSandbox.chrome.tabs.query = async (queryInfo) => {
+    await tabQueriesReady;
+    return queryTabs(queryInfo);
+  };
+  popupSandbox.document.documentElement.dataset.colorScheme = 'teal';
+  const pendingState = popupSandbox.loadPopupStateFromBrowser();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(popupSandbox.document.documentElement.dataset.colorScheme, 'violet');
+  releaseTabQueries();
+  await pendingState;
+  popupSandbox.chrome.tabs.query = queryTabs;
+  popupChromeCalls.tabQueries.length = 0;
+  popupChromeCalls.storageGets.length = 0;
+
   const localState = await popupSandbox.loadPopupStateFromBrowser();
 
   // 搜索首屏直接读取浏览器状态，同时通过共享脚本复用后台的完整分组语义。
@@ -1542,8 +1587,16 @@ async function assertPopupUnifiedSearchStateContract() {
   assert.strictEqual(localState.overview.allTabCount, 3);
   assert.strictEqual(localState.recentlyClosedTabs.length, 0);
   assert.strictEqual(localState.sessions.length, 0);
+  assert.strictEqual(localState.colorScheme, 'violet');
   assert.strictEqual(localState.tabs[1].lastAccessedAt, 400);
   assert.strictEqual(localState.tabs[2].audible, true);
+  assert.strictEqual(popupSandbox.normalizeColorScheme('unknown'), 'teal');
+  assert.strictEqual(popupSandbox.applyColorScheme('navy'), 'navy');
+  assert.strictEqual(popupSandbox.document.documentElement.dataset.colorScheme, 'navy');
+  await popupSandbox.updateColorScheme('indigo');
+  assert.strictEqual(popupSandbox.document.documentElement.dataset.colorScheme, 'indigo');
+  assert.strictEqual(popupPerformanceStoredState['tabgod.colorScheme'], 'indigo');
+  assert.strictEqual(popupElements.get('colorSchemeStatus').textContent, '已切换为星夜靛');
 
   const projectResults = popupSandbox.getVisibleTabsFromState(Object.assign({}, localState, {
     query: '项目 A'
@@ -2137,13 +2190,14 @@ assert.ok(popupHtml.includes('保存工作集'));
 assert.ok(popupHtml.includes('工作集'));
 assert.ok(popupHtml.includes('minTabsPerGroupInput'));
 assert.ok(popupHtml.includes('分组阈值'));
-assert.ok(popupHtml.includes('一键整理'));
-assert.ok(popupHtml.includes('把当前窗口整理成清晰分组'));
+assert.ok(popupHtml.includes('标签之神'));
+assert.ok(popupHtml.includes('整理当前窗口'));
 assert.ok(popupHtml.includes('moreToolsButton'));
 assert.ok(popupHtml.includes('moreToolsSection'));
 assert.ok(popupHtml.includes('打开弹窗'));
 assert.ok(popupHtml.includes('openShortcutHint'));
 assert.ok(popupHtml.includes('openShortcutText'));
+assert.ok(!/<span[^>]*id="openShortcutHint"[^>]*>[\s\S]*?<span>打开<\/span>[\s\S]*?<\/span>/.test(popupHtml));
 assert.ok(popupHtml.includes('organizeShortcutHint'));
 assert.ok(popupHtml.includes('organizeShortcutText'));
 assert.ok(!popupHtml.includes('⌘⇧L'));
@@ -2166,6 +2220,7 @@ assert.ok(popupHtml.includes('searchResultList'));
 assert.ok(popupHtml.includes('sortHelpButton'));
 assert.ok(popupHtml.includes('搜索标签页'));
 assert.ok(popupHtml.includes('placeholder="输入标题或网址"'));
+assert.ok(/\.popup-title-row\s*{[^}]*justify-content:\s*flex-start/.test(popupCssContent));
 assert.ok(!popupHtml.includes('placeholder="输入标题、网址或分组名"'));
 assert.ok(popupHtml.includes('快速切换结果'));
 assert.ok(popupHtml.includes('最近使用'));
@@ -2226,7 +2281,7 @@ async function assertPopupPerformanceContract() {
   assert.strictEqual(startupStages.currentTabs.outcome, 'success');
   assert.strictEqual(startupStages.currentTabs.count, 2);
   assert.strictEqual(startupStages.allTabs.count, 3);
-  assert.strictEqual(startupStages.storage.count, 2);
+  assert.strictEqual(startupStages.storage.count, 3);
   assert.strictEqual(startupStages.browserStateRead.outcome, 'success');
   assert.strictEqual(startupStages.stateBuild.outcome, 'success');
   assert.strictEqual(startupStages.commands.count, 2);
@@ -2493,6 +2548,9 @@ function createPopupPerformanceLifecycleHarness(options = {}) {
     console,
     URL,
     document: {
+      documentElement: {
+        dataset: {}
+      },
       visibilityState: 'visible',
       addEventListener(type, listener) {
         documentListeners[type] = listener;

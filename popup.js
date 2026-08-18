@@ -793,6 +793,14 @@ if (
   }, { once: true });
 }
 
+const DEFAULT_COLOR_SCHEME = 'teal';
+const COLOR_SCHEMES = Object.freeze({
+  teal: '松石青',
+  navy: '远山蓝',
+  violet: '暮云紫',
+  indigo: '星夜靛'
+});
+
 const state = {
   tabs: [],
   recentlyClosedTabs: [],
@@ -823,6 +831,7 @@ const state = {
   query: '',
   visibleTabs: [],
   selectedIndex: 0,
+  colorScheme: DEFAULT_COLOR_SCHEME,
   moreToolsVisible: false,
   performanceDiagnosticsVisible: false,
   performanceDiagnosticsOperationRunning: false,
@@ -853,7 +862,8 @@ const SEARCH_RESULT_LIMIT = 100;
 const DUPLICATE_REVIEW_SCROLL_OPTIONS = { block: 'start', inline: 'nearest' };
 const POPUP_STORAGE_KEYS = {
   settings: 'tabgod.settings',
-  recentAccess: 'tabgod.recentAccess'
+  recentAccess: 'tabgod.recentAccess',
+  colorScheme: 'tabgod.colorScheme'
 };
 const GROUPING = globalThis.TabGodGrouping;
 
@@ -941,10 +951,15 @@ async function loadPopupStateFromBrowser() {
       ),
       measurePopupPerformanceCall(
         'storage',
-        () => chrome.storage.local.get([
-          POPUP_STORAGE_KEYS.settings,
-          POPUP_STORAGE_KEYS.recentAccess
-        ]),
+        async () => {
+          const values = await chrome.storage.local.get([
+            POPUP_STORAGE_KEYS.settings,
+            POPUP_STORAGE_KEYS.recentAccess,
+            POPUP_STORAGE_KEYS.colorScheme
+          ]);
+          applyColorScheme(values[POPUP_STORAGE_KEYS.colorScheme]);
+          return values;
+        },
         (values) => values && typeof values === 'object' ? Object.keys(values).length : null
       )
     ])
@@ -970,6 +985,7 @@ async function loadPopupStateFromBrowser() {
       overview,
       sessions: [],
       settings,
+      colorScheme: normalizeColorScheme(stored[POPUP_STORAGE_KEYS.colorScheme]),
       currentWindowId
     };
   });
@@ -1125,7 +1141,7 @@ async function loadState(options = {}) {
     }
 
     if (!options.keepStatus) {
-      setStatus('已加载标签页');
+      setStatus('');
     }
 
     if (state.moreToolsVisible) {
@@ -1309,6 +1325,13 @@ function bindEvents() {
   document.getElementById('copyPerformanceDiagnosticsButton').addEventListener('click', copyPerformanceDiagnostics);
   document.getElementById('clearPerformanceDiagnosticsButton').addEventListener('click', clearPerformanceDiagnostics);
   document.getElementById('moreToolsButton').addEventListener('click', toggleMoreTools);
+  document.querySelectorAll('input[name="colorScheme"]').forEach((input) => {
+    input.addEventListener('change', () => {
+      if (input.checked) {
+        updateColorScheme(input.value);
+      }
+    });
+  });
   document.getElementById('openShortcutSettingsButton').addEventListener('click', openShortcutSettings);
   document.querySelectorAll('[data-management-panel-button]').forEach((button) => {
     button.addEventListener('click', () => toggleManagementPanel(button.dataset.managementPanelButton));
@@ -1924,6 +1947,11 @@ function renderManagementOverview() {
   const savedTabCount = state.pendingCleanup ? state.pendingCleanup.tabCount : 0;
   const summaries = [
     {
+      key: 'appearance',
+      textId: 'managementAppearanceSummaryText',
+      text: `当前：${COLOR_SCHEMES[state.colorScheme]}`
+    },
+    {
       key: 'shortcuts',
       textId: 'managementShortcutsSummaryText',
       text: '查看与修改 3 项快捷键'
@@ -2142,6 +2170,38 @@ function renderSettings() {
   document.getElementById('minTabsPerGroupInput').value = state.settings.minTabsPerGroup || 2;
 }
 
+function normalizeColorScheme(value) {
+  return Object.prototype.hasOwnProperty.call(COLOR_SCHEMES, value) ? value : DEFAULT_COLOR_SCHEME;
+}
+
+function applyColorScheme(value) {
+  const colorScheme = normalizeColorScheme(value);
+  state.colorScheme = colorScheme;
+  document.documentElement.dataset.colorScheme = colorScheme;
+  document.querySelectorAll('input[name="colorScheme"]').forEach((input) => {
+    input.checked = input.value === colorScheme;
+  });
+
+  const summary = document.getElementById('managementAppearanceSummaryText');
+  if (summary) {
+    summary.textContent = `当前：${COLOR_SCHEMES[colorScheme]}`;
+  }
+
+  return colorScheme;
+}
+
+async function updateColorScheme(value) {
+  const colorScheme = applyColorScheme(value);
+  const status = document.getElementById('colorSchemeStatus');
+
+  try {
+    await chrome.storage.local.set({ [POPUP_STORAGE_KEYS.colorScheme]: colorScheme });
+    status.textContent = `已切换为${COLOR_SCHEMES[colorScheme]}`;
+  } catch (error) {
+    status.textContent = '配色已临时切换，但未能保存';
+  }
+}
+
 function createDefaultCondition() {
   return {
     type: 'condition',
@@ -2241,7 +2301,6 @@ function renderOverview() {
   duplicateHint.hidden = !hasDuplicates;
   duplicateHint.classList.toggle('is-hidden', !hasDuplicates);
   duplicateHint.setAttribute('aria-label', hasDuplicates ? `发现 ${duplicateCount} 个重复标签，点击进入确认` : '没有重复标签提示');
-  document.getElementById('summaryText').textContent = state.query ? '搜索所有已打开标签' : '搜索切换，或一键整理当前窗口';
 }
 
 function renderGroupRules() {

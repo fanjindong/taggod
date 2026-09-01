@@ -186,20 +186,6 @@ h1 {
   gap: 8px;
 }
 
-.quick-action-footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 2px;
-}
-
-.management-toggle-button {
-  flex-shrink: 0;
-  min-height: 30px;
-  padding: 0 10px;
-}
-
 .section-helper-text {
   margin: -2px 0 8px;
   color: var(--muted-soft);
@@ -567,25 +553,6 @@ kbd {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--line);
-}
-
-.performance-diagnostics-panel {
-  display: grid;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-}
-
-.performance-diagnostics-text {
-  width: 100%;
-  min-height: 140px;
-  resize: vertical;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 8px;
-  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .group-list {
@@ -972,7 +939,6 @@ body {
 .quick-status,
 .quick-results-section,
 .quick-action-area,
-.performance-diagnostics-panel,
 .more-tools-section,
 .status-text {
   margin-top: 0;
@@ -1362,25 +1328,6 @@ button:disabled {
   border-color: var(--primary-line);
   color: var(--primary-strong);
   background: var(--primary-soft);
-}
-
-.quick-action-footer {
-  justify-content: flex-end;
-  padding-top: 0;
-}
-
-.management-toggle-button {
-  min-height: 28px;
-  padding: 0 2px;
-  border: 0;
-  color: var(--muted);
-  background: transparent;
-}
-
-.management-toggle-button:hover {
-  border-color: transparent;
-  color: var(--primary);
-  background: transparent;
 }
 
 .management-save-workspace-button {

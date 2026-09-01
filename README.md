@@ -41,7 +41,7 @@
 
 | 操作 | macOS | Windows 和 Linux |
 | --- | --- | --- |
-| 打开弹窗 | `Command+Shift+L` | `Ctrl+Shift+L` |
+| 打开弹窗 | `Command+Shift+K` | `Ctrl+Shift+K` |
 | 整理当前窗口 | `Command+Shift+Y` | `Ctrl+Shift+Y` |
 | 保存当前窗口为工作集 | `Command+Shift+S` | `Ctrl+Shift+S` |
 

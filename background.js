@@ -4,7 +4,6 @@ if (typeof importScripts === 'function') {
 }
 
 const {
-  DEFAULT_SETTINGS,
   MAX_GROUP_RULE_CONDITION_COUNT,
   buildGroupRuleIdentity,
   buildResolvedGroupTitleMapFromGroupInfos,
@@ -14,7 +13,6 @@ const {
   getDomainKey,
   getHostnameKey,
   getResolvedGroupInfoFromNormalizedSettings,
-  getShortGroupTitle,
   getTabUrl,
   normalizeGroupRule,
   normalizeConditionTree,
@@ -24,14 +22,11 @@ const {
 const STORAGE_KEYS = {
   sessions: 'tabgod.sessions',
   settings: 'tabgod.settings',
-  recentAccess: 'tabgod.recentAccess',
   pendingCleanup: 'tabgod.pendingCleanup'
 };
 
 const GROUP_COLORS = ['blue', 'green', 'yellow', 'red', 'purple', 'cyan', 'orange', 'pink', 'grey'];
 
-// 只保留最近 300 个标签激活记录，原因是该记录只用于排序兜底，过多历史会浪费本地存储。
-const RECENT_ACCESS_LIMIT = 300;
 // Chrome 限制最近关闭会话查询最多 25 条，请求更大数值会直接抛错。
 const RECENTLY_CLOSED_SESSION_LIMIT = 25;
 // 会话里的关闭窗口可能包含多个标签，拆分后的搜索结果仍要限量，避免弹窗输入时处理过多数据。
@@ -78,19 +73,30 @@ function getGroupColor(index) {
 
 function normalizeWorkspace(workspace) {
   const createdAt = Number(workspace && workspace.createdAt) || Date.now();
+  const rawTabs = Array.isArray(workspace && workspace.tabs) ? workspace.tabs : [];
+  const storedGroupCount = workspace && workspace.groupCount;
+  const groupCount = Number.isInteger(storedGroupCount) && storedGroupCount >= 0
+    ? storedGroupCount
+    : Array.isArray(workspace && workspace.groups)
+      ? workspace.groups.length
+      : new Set(rawTabs.map((tab) => String(tab && tab.groupKey || '')).filter(Boolean)).size;
 
-  return Object.assign({}, workspace, {
+  return {
     id: workspace && workspace.id ? workspace.id : `session-${createdAt}`,
     name: workspace && workspace.name ? workspace.name : `${formatDateTime(createdAt)} 的工作集`,
     createdAt,
-    updatedAt: Number(workspace && workspace.updatedAt) || createdAt,
     favorite: Boolean(workspace && workspace.favorite),
     favoritedAt: Number(workspace && workspace.favoritedAt) || 0,
     activeUrl: workspace && workspace.activeUrl ? workspace.activeUrl : '',
     sourceWindowId: Number.isInteger(workspace && workspace.sourceWindowId) ? workspace.sourceWindowId : null,
-    tabs: Array.isArray(workspace && workspace.tabs) ? workspace.tabs : [],
-    groups: Array.isArray(workspace && workspace.groups) ? workspace.groups : []
-  });
+    tabs: rawTabs.map((tab) => ({
+      id: Number.isInteger(tab && tab.id) ? tab.id : null,
+      title: String(tab && tab.title ? tab.title : ''),
+      url: getTabUrl(tab),
+      pinned: Boolean(tab && tab.pinned)
+    })),
+    groupCount
+  };
 }
 
 /**
@@ -106,48 +112,6 @@ function runWorkspaceStorageMutation(operation) {
   return currentOperation;
 }
 
-function normalizeRecentAccessMap(value) {
-  const entries = Object.entries(value || {})
-    .filter(([tabId, accessedAt]) => Number.isInteger(Number(tabId)) && Number.isFinite(accessedAt))
-    .sort((left, right) => right[1] - left[1])
-    .slice(0, RECENT_ACCESS_LIMIT);
-
-  return Object.fromEntries(entries);
-}
-
-async function recordRecentTabAccess(tabId) {
-  if (!Number.isInteger(tabId)) {
-    return;
-  }
-
-  const stored = await chrome.storage.local.get([STORAGE_KEYS.recentAccess]);
-  const recentAccess = normalizeRecentAccessMap(stored[STORAGE_KEYS.recentAccess]);
-  recentAccess[String(tabId)] = Date.now();
-
-  await chrome.storage.local.set({
-    [STORAGE_KEYS.recentAccess]: normalizeRecentAccessMap(recentAccess)
-  });
-}
-
-async function removeRecentTabAccess(tabId) {
-  if (!Number.isInteger(tabId)) {
-    return;
-  }
-
-  const stored = await chrome.storage.local.get([STORAGE_KEYS.recentAccess]);
-  const recentAccess = normalizeRecentAccessMap(stored[STORAGE_KEYS.recentAccess]);
-
-  if (!Object.prototype.hasOwnProperty.call(recentAccess, String(tabId))) {
-    return;
-  }
-
-  delete recentAccess[String(tabId)];
-
-  await chrome.storage.local.set({
-    [STORAGE_KEYS.recentAccess]: recentAccess
-  });
-}
-
 function sortWorkspaces(workspaces) {
   return [...workspaces].map(normalizeWorkspace).sort((left, right) => {
     if (left.favorite !== right.favorite) {
@@ -160,13 +124,6 @@ function sortWorkspaces(workspaces) {
 
     return right.createdAt - left.createdAt;
   });
-}
-
-function shouldCreateNativeGroup(tabIds, settings) {
-  const normalizedSettings = normalizeSettings(settings);
-
-  // 这是旧的 tabId 数量阈值入口；涉及规则级阈值时应使用 shouldCreateNativeGroupForTabs。
-  return Array.isArray(tabIds) && tabIds.length >= normalizedSettings.minTabsPerGroup;
 }
 
 /**
@@ -204,10 +161,6 @@ function resolveGroupThresholdFromNormalizedSettings(groupTabs, normalizedSettin
   return normalizedSettings.minTabsPerGroup;
 }
 
-function resolveGroupThreshold(groupTabs, settings) {
-  return resolveGroupThresholdFromNormalizedSettings(groupTabs, normalizeSettings(settings));
-}
-
 /**
  * 使用已归一化配置判断同组标签是否达到建组阈值。
  * @param {Array<Object>} groupTabs 同一最终分组内的标签页。
@@ -224,10 +177,6 @@ function shouldCreateNativeGroupForTabsFromNormalizedSettings(groupTabs, normali
   );
 
   return safeGroupTabs.length >= threshold;
-}
-
-function shouldCreateNativeGroupForTabs(groupTabs, settings) {
-  return shouldCreateNativeGroupForTabsFromNormalizedSettings(groupTabs, normalizeSettings(settings));
 }
 
 function isPriorityGroup(settings, groupKey) {
@@ -270,10 +219,6 @@ function buildPriorityGroupOrderMapFromNormalizedSettings(normalizedSettings) {
   return orderMap;
 }
 
-function buildPriorityGroupOrderMap(settings) {
-  return buildPriorityGroupOrderMapFromNormalizedSettings(normalizeSettings(settings));
-}
-
 function buildCurrentGroupOrderMapFromNormalizedSettings(tabs, normalizedSettings, resolvedGroupInfoMap = null) {
   const orderMap = new Map();
 
@@ -291,10 +236,6 @@ function buildCurrentGroupOrderMapFromNormalizedSettings(tabs, normalizedSetting
   });
 
   return orderMap;
-}
-
-function buildCurrentGroupOrderMap(tabs, settings = DEFAULT_SETTINGS) {
-  return buildCurrentGroupOrderMapFromNormalizedSettings(tabs, normalizeSettings(settings));
 }
 
 function buildGroupableDomainSetFromNormalizedSettings(tabs, normalizedSettings, resolvedGroupInfoMap = null) {
@@ -317,10 +258,6 @@ function buildGroupableDomainSetFromNormalizedSettings(tabs, normalizedSettings,
       return shouldCreateNativeGroupForTabsFromNormalizedSettings(groupTabs, normalizedSettings, groupKey);
     })
     .map(([groupKey]) => groupKey));
-}
-
-function buildGroupableDomainSet(tabs, settings) {
-  return buildGroupableDomainSetFromNormalizedSettings(tabs, normalizeSettings(settings));
 }
 
 function buildOrganizedTabsFromNormalizedSettings(tabs, normalizedSettings) {
@@ -402,10 +339,6 @@ function buildOrganizedTabsFromNormalizedSettings(tabs, normalizedSettings) {
   });
 }
 
-function buildOrganizedTabs(tabs, settings) {
-  return buildOrganizedTabsFromNormalizedSettings(tabs, normalizeSettings(settings));
-}
-
 async function queryCurrentWindowTabs() {
   return chrome.tabs.query({ currentWindow: true });
 }
@@ -465,9 +398,7 @@ function buildRecentlyClosedTabSnapshot(tab, options) {
     url,
     groupKey: groupInfo.groupKey,
     groupTitle: groupInfo.title,
-    shortGroupTitle: getShortGroupTitle(groupInfo.groupKey),
     closedAt: options.closedAt,
-    lastAccessedAt: options.closedAt,
     isCurrentWindow: false,
     windowLabel: options.windowLabel || '最近关闭',
     restoreScope: options.restoreScope || 'tab',
@@ -556,13 +487,6 @@ function buildRecentlyClosedTabSnapshotsFromNormalizedSettings(recentlyClosedSes
   }));
 }
 
-function buildRecentlyClosedTabSnapshots(recentlyClosedSessions, settings) {
-  return buildRecentlyClosedTabSnapshotsFromNormalizedSettings(
-    recentlyClosedSessions,
-    normalizeSettings(settings)
-  );
-}
-
 function chooseDuplicateKeepTab(tabs) {
   const sortedTabs = [...tabs].sort((left, right) => {
     if (left.pinned !== right.pinned) {
@@ -639,26 +563,6 @@ function buildDuplicateGroups(tabs) {
   return duplicateGroups;
 }
 
-function buildOverview(tabs) {
-  const domainSet = new Set();
-  const groupSet = new Set();
-
-  tabs.forEach((tab) => {
-    domainSet.add(getDomainKey(tab.url || ''));
-
-    if (typeof tab.groupId === 'number' && tab.groupId >= 0) {
-      groupSet.add(tab.groupId);
-    }
-  });
-
-  return {
-    tabCount: tabs.length,
-    domainCount: domainSet.size,
-    duplicateCount: null,
-    groupCount: groupSet.size
-  };
-}
-
 async function getDuplicateOverview() {
   // 顶部重复提示会直接引导用户点“智能去重”，必须和去重扫描保持当前窗口口径。
   const tabs = await queryCurrentWindowTabs();
@@ -699,7 +603,14 @@ async function getManagementState() {
 
   return {
     groups: buildGroupSummariesFromNormalizedSettings(tabs, settings),
-    sessions: sortWorkspaces(stored[STORAGE_KEYS.sessions] || []),
+    sessions: sortWorkspaces(stored[STORAGE_KEYS.sessions] || []).map((workspace) => ({
+      id: workspace.id,
+      name: workspace.name,
+      createdAt: workspace.createdAt,
+      favorite: workspace.favorite,
+      tabCount: workspace.tabs.length,
+      groupCount: workspace.groupCount
+    })),
     pendingCleanup: pendingCleanup ? {
       token: pendingCleanup.token,
       tabCount: pendingCleanup.tabs.length
@@ -822,10 +733,6 @@ async function reconcileCurrentWindowGroupsFromNormalizedSettings(normalizedSett
   return reconcileWindowGroupsFromTabs(tabs, normalizedSettings);
 }
 
-async function reconcileCurrentWindowGroups(settings) {
-  return reconcileCurrentWindowGroupsFromNormalizedSettings(normalizeSettings(settings));
-}
-
 function buildGroupSummariesFromNormalizedSettings(tabs, normalizedSettings) {
   const groupMap = new Map();
   const resolvedGroupInfoMap = buildResolvedGroupInfoMap(tabs, normalizedSettings);
@@ -901,10 +808,6 @@ function buildGroupSummariesFromNormalizedSettings(tabs, normalizedSettings) {
     starred: summary.starred,
     currentOrder: summary.currentOrder
   }));
-}
-
-function buildGroupSummaries(tabs, settings) {
-  return buildGroupSummariesFromNormalizedSettings(tabs, normalizeSettings(settings));
 }
 
 async function scanDuplicateTabs(targetWindowId = null) {
@@ -1159,18 +1062,17 @@ async function saveWorkspace(name, options = {}) {
   const createdAt = Date.now();
   const snapshots = buildTabSnapshotsFromNormalizedSettings(tabs, settings);
   const activeTab = snapshots.find((tab) => tab.active);
-  const groups = buildGroupSnapshots(snapshots);
+  const groupCount = new Set(snapshots.map((tab) => tab.groupKey)).size;
   const sourceWindowId = getWindowIdFromTabs(tabs);
   const workspaceName = String(name || '').trim() || `${formatDateTime(createdAt)} 的工作集`;
   const workspace = normalizeWorkspace({
     id: `session-${createdAt}`,
     name: workspaceName,
     createdAt,
-    updatedAt: createdAt,
     activeUrl: activeTab ? activeTab.url : '',
     sourceWindowId,
     tabs: snapshots,
-    groups
+    groupCount
   });
   await runWorkspaceStorageMutation(async () => {
     const workspaceStored = await chrome.storage.local.get([STORAGE_KEYS.sessions]);
@@ -1184,8 +1086,6 @@ async function saveWorkspace(name, options = {}) {
   const pendingCleanup = await storePendingCleanup(workspace).catch(() => null);
 
   return {
-    workspace,
-    session: workspace,
     savedCount: snapshots.length,
     cleanupToken: pendingCleanup ? pendingCleanup.token : '',
     cleanupTabCount: pendingCleanup ? pendingCleanup.tabs.length : 0
@@ -1213,7 +1113,6 @@ async function activateTabAcrossWindows(tabId) {
   }
 
   await chrome.tabs.update(tab.id, { active: true });
-  await recordRecentTabAccess(tab.id).catch(() => undefined);
 
   return {
     activated: true,
@@ -1462,9 +1361,7 @@ function buildRuleForCreate(rule) {
     name,
     targetTitle,
     // 新建规则用目标标题生成分组键，原因是后续改标题时仍需要稳定定位原浏览器分组。
-    targetGroupKey: `custom:${targetTitle}`,
-    createdAt: now,
-    updatedAt: now
+    targetGroupKey: `custom:${targetTitle}`
   });
 
   assertValidGroupRule(ruleForCreate);
@@ -1548,9 +1445,7 @@ async function updateGroupRule(ruleId, partialRule) {
     const candidateRule = Object.assign({}, currentRule, partialRule || {}, {
       id: currentRule.id,
       // 分组键是规则的稳定身份，禁止通过编辑入口修改，避免已存在分组被悄悄迁移。
-      targetGroupKey: currentRule.targetGroupKey,
-      createdAt: currentRule.createdAt,
-      updatedAt: Date.now()
+      targetGroupKey: currentRule.targetGroupKey
     });
 
     assertValidGroupRule(candidateRule);
@@ -1671,8 +1566,7 @@ async function renameWorkspace(workspaceId, name) {
       }
 
       renamedWorkspace = normalizeWorkspace(Object.assign({}, workspace, {
-        name: trimmedName,
-        updatedAt: Date.now()
+        name: trimmedName
       }));
       return renamedWorkspace;
     });
@@ -1724,8 +1618,7 @@ async function toggleWorkspaceFavorite(workspaceId) {
       const nextFavorite = !workspace.favorite;
       updatedWorkspace = normalizeWorkspace(Object.assign({}, workspace, {
         favorite: nextFavorite,
-        favoritedAt: nextFavorite ? Date.now() : 0,
-        updatedAt: Date.now()
+        favoritedAt: nextFavorite ? Date.now() : 0
       }));
       return updatedWorkspace;
     });
@@ -1739,25 +1632,6 @@ async function toggleWorkspaceFavorite(workspaceId) {
     workspace: updatedWorkspace,
     favorite: updatedWorkspace.favorite
   };
-}
-
-function buildGroupSnapshots(tabs) {
-  const groupMap = new Map();
-
-  tabs.forEach((tab) => {
-    const groupKey = tab.groupKey || '其他';
-    const snapshot = groupMap.get(groupKey) || {
-      groupKey,
-      title: tab.groupTitle || groupKey,
-      color: getGroupColor(groupMap.size),
-      tabCount: 0
-    };
-
-    snapshot.tabCount += 1;
-    groupMap.set(groupKey, snapshot);
-  });
-
-  return Array.from(groupMap.values());
 }
 
 function formatDateTime(timestamp) {
@@ -1867,7 +1741,19 @@ async function restoreSession(sessionId, options = {}) {
 
   // 恢复工作集可能发生在已有同名分组的窗口中，必须重新梳理整个目标窗口，且不能受恢复期间焦点变化影响。
   try {
-    await reconcileWindowGroupsFromNormalizedSettings(targetWindowId, settings);
+    const restoredTitleMap = new Map(createdTabs
+      .filter((tab) => Number.isInteger(tab && tab.id) && tab.title)
+      .map((tab) => [tab.id, tab.title]));
+    const targetTabs = await queryWindowTabs(targetWindowId);
+    const tabsForGrouping = targetTabs.map((tab) => {
+      const restoredTitle = restoredTitleMap.get(tab.id);
+
+      // 新建标签可能尚未加载出标题；使用工作集快照可让标题规则首次恢复时稳定命中。
+      return restoredTitle && !tab.title
+        ? Object.assign({}, tab, { title: restoredTitle })
+        : tab;
+    });
+    await reconcileWindowGroupsFromTabs(tabsForGrouping, settings);
   } catch (error) {
     // 标签已经成功创建时不能把分组失败冒充成整体失败，否则用户重试会重复恢复全部页面。
     groupingFailed = true;
@@ -1965,16 +1851,6 @@ chrome.commands.onCommand.addListener((command) => {
   handleCommand(command);
 });
 
-chrome.tabs.onActivated.addListener((activeInfo) => {
-  // 事件记录只作为 lastAccessed 缺失时的排序兜底，失败不影响标签切换主流程。
-  recordRecentTabAccess(activeInfo.tabId).catch(() => undefined);
-});
-
-chrome.tabs.onRemoved.addListener((tabId) => {
-  // 标签关闭后清理本地记录，避免已关闭标签长期占用最近使用存储。
-  removeRecentTabAccess(tabId).catch(() => undefined);
-});
-
 async function handleMessage(message) {
   const action = message && message.action;
 
@@ -2034,16 +1910,6 @@ async function handleMessage(message) {
 
   if (action === 'toggle-workspace-favorite') {
     return toggleWorkspaceFavorite(message.workspaceId);
-  }
-
-  if (action === 'save-session') {
-    return saveWorkspace(message.name);
-  }
-
-  if (action === 'restore-session') {
-    return restoreSession(message.sessionId, {
-      targetWindowId: message.targetWindowId
-    });
   }
 
   if (action === 'toggle-priority-group') {

@@ -1,16 +1,3 @@
-if (typeof document !== 'undefined') {
-  try {
-    globalThis.__tabgodPopupGroupingPerformance = {
-      start: typeof performance !== 'undefined' && typeof performance.now === 'function'
-        ? performance.now()
-        : null,
-      end: null
-    };
-  } catch (error) {
-    globalThis.__tabgodPopupGroupingPerformance = { start: null, end: null };
-  }
-}
-
 (() => {
   const DEFAULT_SETTINGS = {
     // 限制保存数量是为了避免本地存储无限增长，同时保留最近的工作现场。
@@ -50,6 +37,7 @@ if (typeof document !== 'undefined') {
   const GROUP_RULE_FIELDS = new Set(['hostname', 'primaryDomain', 'path', 'url', 'title']);
   const GROUP_RULE_OPERATORS = new Set(['contains', 'equals', 'startsWith']);
   const GROUP_RULE_LOGICS = new Set(['and', 'or']);
+  const RULE_MATCH_CONTEXT_CACHE = new WeakMap();
   // 单条规则最多 8 个真实条件，原因是 OR 域名场景需要比旧版更多空间，但弹窗仍要保持可控。
   const MAX_GROUP_RULE_CONDITION_COUNT = 8;
   // 条件组最多两层，避免弹窗编辑器变成难以理解的表达式树。
@@ -135,28 +123,42 @@ if (typeof document !== 'undefined') {
 
   function buildRuleMatchContext(tab) {
     const url = getTabUrl(tab);
+    const title = tab && tab.title ? tab.title : '';
+    const cachedContext = tab && typeof tab === 'object' ? RULE_MATCH_CONTEXT_CACHE.get(tab) : null;
+
+    if (cachedContext && cachedContext.url === url && cachedContext.title === title) {
+      return cachedContext;
+    }
+
+    let context;
 
     try {
       const parsedUrl = new URL(url);
       const hostname = String(parsedUrl.hostname || '').toLowerCase().replace(/\.$/, '');
 
-      return {
+      context = {
         hostname,
         primaryDomain: getPrimaryDomainFromHostname(hostname),
         path: parsedUrl.pathname || '/',
         url,
-        title: tab && tab.title ? tab.title : ''
+        title
       };
     } catch (error) {
       // 异常网址仍允许用标题匹配，其他 URL 字段用空值避免误判。
-      return {
+      context = {
         hostname: '其他',
         primaryDomain: '其他',
         path: '',
         url,
-        title: tab && tab.title ? tab.title : ''
+        title
       };
     }
+
+    if (tab && typeof tab === 'object') {
+      RULE_MATCH_CONTEXT_CACHE.set(tab, context);
+    }
+
+    return context;
   }
 
   function doesRuleConditionMatch(context, condition) {
@@ -399,7 +401,6 @@ if (typeof document !== 'undefined') {
    * @returns {Object|null} 归一化规则或空值。
    */
   function normalizeGroupRule(rule, generatedId) {
-    const now = Date.now();
     const identity = buildGroupRuleIdentity(rule);
 
     if (!identity.name || !identity.targetTitle || !identity.targetGroupKey || !identity.conditionTree) {
@@ -414,10 +415,7 @@ if (typeof document !== 'undefined') {
       targetGroupKey: identity.targetGroupKey,
       targetTitle: identity.targetTitle,
       minTabsPerGroup: identity.minTabsPerGroup,
-      conditionTree: identity.conditionTree,
-      // 时间字段只是兼容旧配置的展示/排查元数据，不参与稳定 id 和匹配行为。
-      createdAt: Number(rule && rule.createdAt) || now,
-      updatedAt: Number(rule && rule.updatedAt) || now
+      conditionTree: identity.conditionTree
     };
   }
 
@@ -519,19 +517,20 @@ if (typeof document !== 'undefined') {
    * @returns {Object} 分组键、标题、命中规则编号和建组阈值。
    */
   function getResolvedGroupInfoFromNormalizedSettings(tab, normalizedSettings) {
-    if (tab && tab.pinned) {
-      const url = getTabUrl(tab);
+    const context = buildRuleMatchContext(tab);
+    const primaryDomain = context.primaryDomain;
 
+    if (tab && tab.pinned) {
       return {
-        groupKey: getDomainKey(url),
-        title: getDomainKey(url),
+        groupKey: primaryDomain,
+        title: primaryDomain,
         ruleId: '',
         minTabsPerGroup: normalizedSettings.minTabsPerGroup
       };
     }
 
     for (const rule of normalizedSettings.groupRules) {
-      if (doesRuleMatchTab(rule, tab)) {
+      if (rule.enabled && rule.conditionTree && doesConditionTreeNodeMatch(context, rule.conditionTree)) {
         return {
           groupKey: rule.targetGroupKey,
           title: rule.targetTitle,
@@ -541,24 +540,12 @@ if (typeof document !== 'undefined') {
       }
     }
 
-    const groupKey = getDomainKey(getTabUrl(tab));
-
     return {
-      groupKey,
-      title: groupKey,
+      groupKey: primaryDomain,
+      title: primaryDomain,
       ruleId: '',
       minTabsPerGroup: normalizedSettings.minTabsPerGroup
     };
-  }
-
-  /**
-   * 使用原始配置解析单个标签页的最终分组。
-   * @param {Object} tab Chrome 标签页对象。
-   * @param {Object} settings 原始插件配置。
-   * @returns {Object} 分组键、标题、命中规则编号和建组阈值。
-   */
-  function getResolvedGroupInfo(tab, settings) {
-    return getResolvedGroupInfoFromNormalizedSettings(tab, normalizeSettings(settings));
   }
 
   /**
@@ -667,16 +654,6 @@ if (typeof document !== 'undefined') {
   }
 
   /**
-   * 使用原始配置批量解析稳定的分组标题映射。
-   * @param {Array<Object>} tabs Chrome 标签页列表。
-   * @param {Object} settings 原始插件配置。
-   * @returns {Map<string, string>} 分组键到最终标题的映射。
-   */
-  function buildResolvedGroupTitleMap(tabs, settings = DEFAULT_SETTINGS) {
-    return buildResolvedGroupTitleMapFromNormalizedSettings(tabs, normalizeSettings(settings));
-  }
-
-  /**
    * 使用已解析的分组信息构建单个标签页快照。
    * @param {Object} tab Chrome 标签页对象。
    * @param {Object} groupInfo 标签页最终分组信息。
@@ -689,29 +666,12 @@ if (typeof document !== 'undefined') {
       id: tab.id,
       title: tab.title || '未命名标签',
       url,
-      favIconUrl: tab.favIconUrl || '',
       active: Boolean(tab.active),
       pinned: Boolean(tab.pinned),
       index: Number.isInteger(tab.index) ? tab.index : 0,
       groupKey: groupInfo.groupKey,
       groupTitle: groupInfo.title
     };
-  }
-
-  function buildTabSnapshotFromNormalizedSettings(tab, normalizedSettings) {
-    const groupInfo = getResolvedGroupInfoFromNormalizedSettings(tab, normalizedSettings);
-
-    return buildTabSnapshotFromResolvedGroupInfo(tab, groupInfo);
-  }
-
-  /**
-   * 使用原始配置构建单个标签页快照。
-   * @param {Object} tab Chrome 标签页对象。
-   * @param {Object} settings 原始插件配置。
-   * @returns {Object} 可保存和搜索的标签页快照。
-   */
-  function buildTabSnapshot(tab, settings = DEFAULT_SETTINGS) {
-    return buildTabSnapshotFromNormalizedSettings(tab, normalizeSettings(settings));
   }
 
   /**
@@ -739,28 +699,14 @@ if (typeof document !== 'undefined') {
     }));
   }
 
-  /**
-   * 使用原始配置批量构建标签页快照，配置只会归一化一次。
-   * @param {Array<Object>} tabs Chrome 标签页列表。
-   * @param {Object} settings 原始插件配置。
-   * @returns {Array<Object>} 标题语义统一的标签页快照列表。
-   */
-  function buildTabSnapshots(tabs, settings = DEFAULT_SETTINGS) {
-    // 普通入口只在批量处理开始前归一化一次，避免每个标签重复重建全部规则。
-    return buildTabSnapshotsFromNormalizedSettings(tabs, normalizeSettings(settings));
-  }
-
   // 显式命名空间避免共享脚本向弹窗和后台散落大量隐式全局变量。
   globalThis.TabGodGrouping = Object.freeze({
     DEFAULT_SETTINGS,
     MAX_GROUP_RULE_CONDITION_COUNT,
     buildGroupRuleIdentity,
     buildGroupTitleMap,
-    buildResolvedGroupTitleMap,
     buildResolvedGroupTitleMapFromGroupInfos,
     buildResolvedGroupTitleMapFromNormalizedSettings,
-    buildTabSnapshot,
-    buildTabSnapshots,
     buildTabSnapshotsFromNormalizedSettings,
     countConditionTreeConditions,
     doesConditionTreeMatchTab,
@@ -768,7 +714,6 @@ if (typeof document !== 'undefined') {
     getDomainKey,
     getHostnameKey,
     getPrimaryDomainFromHostname,
-    getResolvedGroupInfo,
     getResolvedGroupInfoFromNormalizedSettings,
     getShortGroupTitle,
     getTabUrl,
@@ -781,15 +726,3 @@ if (typeof document !== 'undefined') {
     normalizeSettings
   });
 })();
-
-if (typeof document !== 'undefined') {
-  try {
-    const timing = globalThis.__tabgodPopupGroupingPerformance || { start: null, end: null };
-    timing.end = typeof performance !== 'undefined' && typeof performance.now === 'function'
-      ? performance.now()
-      : null;
-    globalThis.__tabgodPopupGroupingPerformance = timing;
-  } catch (error) {
-    // 性能探针失败不能影响共享分组逻辑。
-  }
-}

@@ -1,798 +1,3 @@
-const POPUP_SCRIPT_START = (() => {
-  try {
-    return typeof performance !== 'undefined' && typeof performance.now === 'function'
-      ? performance.now()
-      : null;
-  } catch (error) {
-    return null;
-  }
-})();
-
-const POPUP_GROUPING_PERFORMANCE = globalThis.__tabgodPopupGroupingPerformance || {};
-
-try {
-  delete globalThis.__tabgodPopupGroupingPerformance;
-} catch (error) {
-  // 临时探针字段清理失败不影响弹窗业务。
-}
-
-const POPUP_PERFORMANCE_SCHEMA_VERSION = 1;
-const POPUP_PERFORMANCE_HISTORY_LIMIT = 20;
-const POPUP_PERFORMANCE_HISTORY_KEY = 'tabgod.popupPerformanceHistory';
-const POPUP_PERFORMANCE_SESSION_KEY = 'tabgod.popupPerformanceSession';
-const POPUP_PERFORMANCE_EXPORT_FORMAT = 'tabgod-popup-performance';
-const POPUP_PERFORMANCE_STAGE_NAMES = [
-  'commands',
-  'currentTabs',
-  'allTabs',
-  'storage',
-  'browserStateRead',
-  'stateBuild',
-  'render',
-  'loadState',
-  'duplicateOverview'
-];
-const POPUP_PERFORMANCE_RESOURCE_NAMES = ['popup.css', 'grouping.js', 'popup.js'];
-
-const popupPerformance = {
-  enabled: Number.isFinite(POPUP_SCRIPT_START),
-  status: Number.isFinite(POPUP_SCRIPT_START) ? 'collecting' : 'unavailable',
-  message: Number.isFinite(POPUP_SCRIPT_START) ? '' : '本次性能记录不可用',
-  startupOutcome: 'success',
-  measurementPartial: false,
-  freezeStarted: false,
-  loadEventSettled: false,
-  initialLoadStarted: false,
-  initialLoadSettled: false,
-  usableFramesScheduled: false,
-  suppressCurrentHistory: false,
-  clearPromise: null,
-  persistPromise: null,
-  paintSupported: false,
-  longTaskSupported: false,
-  paintObserver: null,
-  longTaskObserver: null,
-  navigation: null,
-  resourceEntryCount: null,
-  resources: Object.fromEntries(POPUP_PERFORMANCE_RESOURCE_NAMES.map((name) => [name, null])),
-  points: {
-    groupingScriptStart: Number.isFinite(POPUP_GROUPING_PERFORMANCE.start)
-      ? POPUP_GROUPING_PERFORMANCE.start
-      : null,
-    groupingScriptEnd: Number.isFinite(POPUP_GROUPING_PERFORMANCE.end)
-      ? POPUP_GROUPING_PERFORMANCE.end
-      : null,
-    scriptStart: Number.isFinite(POPUP_SCRIPT_START) ? POPUP_SCRIPT_START : null
-  },
-  stages: {},
-  context: {
-    currentTabCount: null,
-    allTabCount: null,
-    windowCount: null
-  },
-  longTasks: []
-};
-
-function getPopupPerformanceNow() {
-  if (!popupPerformance.enabled) {
-    return null;
-  }
-
-  try {
-    return performance.now();
-  } catch (error) {
-    popupPerformance.enabled = false;
-    popupPerformance.status = 'unavailable';
-    popupPerformance.message = '本次性能记录不可用';
-    return null;
-  }
-}
-
-function roundPopupPerformanceNumber(value) {
-  return Number.isFinite(value) ? Number(value.toFixed(1)) : null;
-}
-
-function getPopupPerformanceDifference(end, start) {
-  return Number.isFinite(end) && Number.isFinite(start)
-    ? roundPopupPerformanceNumber(end - start)
-    : null;
-}
-
-function recordPopupPerformancePoint(name, value = getPopupPerformanceNow()) {
-  if (
-    !popupPerformance.enabled
-    || popupPerformance.freezeStarted
-    || Object.prototype.hasOwnProperty.call(popupPerformance.points, name)
-  ) {
-    return;
-  }
-
-  popupPerformance.points[name] = Number.isFinite(value) ? value : null;
-}
-
-function beginPopupPerformanceStage(name) {
-  if (
-    !popupPerformance.enabled
-    || popupPerformance.freezeStarted
-    || Object.prototype.hasOwnProperty.call(popupPerformance.stages, name)
-  ) {
-    return null;
-  }
-
-  const start = getPopupPerformanceNow();
-  popupPerformance.stages[name] = {
-    start,
-    end: null,
-    duration: null,
-    outcome: start === null ? 'unsupported' : 'pending',
-    count: null
-  };
-  return start;
-}
-
-function finishPopupPerformanceStage(name, start, outcome, count = null) {
-  if (popupPerformance.freezeStarted) {
-    return;
-  }
-
-  const stage = popupPerformance.stages[name];
-
-  if (!stage || stage.end !== null || start === null) {
-    return;
-  }
-
-  const end = getPopupPerformanceNow();
-  stage.end = end;
-  stage.duration = Number.isFinite(end) ? end - start : null;
-  stage.outcome = outcome;
-  stage.count = Number.isFinite(count) ? count : null;
-}
-
-function markPopupPerformanceStageUnsupported(name) {
-  if (
-    !popupPerformance.enabled
-    || popupPerformance.freezeStarted
-    || Object.prototype.hasOwnProperty.call(popupPerformance.stages, name)
-  ) {
-    return;
-  }
-
-  popupPerformance.stages[name] = {
-    start: null,
-    end: null,
-    duration: null,
-    outcome: 'unsupported',
-    count: null
-  };
-}
-
-function measurePopupPerformanceCall(name, task, getCount = () => null) {
-  if (
-    !popupPerformance.enabled
-    || popupPerformance.freezeStarted
-    || Object.prototype.hasOwnProperty.call(popupPerformance.stages, name)
-  ) {
-    return task();
-  }
-
-  const start = beginPopupPerformanceStage(name);
-  let result;
-
-  try {
-    result = task();
-  } catch (error) {
-    finishPopupPerformanceStage(name, start, 'error');
-    throw error;
-  }
-
-  return Promise.resolve(result).then(
-    (value) => {
-      let count = null;
-
-      try {
-        count = getCount(value);
-      } catch (error) {
-        count = null;
-      }
-
-      finishPopupPerformanceStage(name, start, 'success', count);
-      return value;
-    },
-    (error) => {
-      finishPopupPerformanceStage(name, start, 'error');
-      throw error;
-    }
-  );
-}
-
-function measurePopupPerformanceSync(name, task) {
-  if (
-    !popupPerformance.enabled
-    || popupPerformance.freezeStarted
-    || Object.prototype.hasOwnProperty.call(popupPerformance.stages, name)
-  ) {
-    return task();
-  }
-
-  const start = beginPopupPerformanceStage(name);
-
-  try {
-    const value = task();
-    finishPopupPerformanceStage(name, start, 'success');
-    return value;
-  } catch (error) {
-    finishPopupPerformanceStage(name, start, 'error');
-    throw error;
-  }
-}
-
-function ingestPopupPaintEntries(entries, ignoreFrozen = false) {
-  if (popupPerformance.freezeStarted && !ignoreFrozen) {
-    return;
-  }
-
-  Array.from(entries || []).forEach((entry) => {
-    if (entry && entry.name === 'first-paint' && !Number.isFinite(popupPerformance.points.firstPaint)) {
-      popupPerformance.points.firstPaint = entry.startTime;
-    }
-
-    if (
-      entry
-      && entry.name === 'first-contentful-paint'
-      && !Number.isFinite(popupPerformance.points.firstContentfulPaint)
-    ) {
-      popupPerformance.points.firstContentfulPaint = entry.startTime;
-    }
-  });
-
-  if (!ignoreFrozen) {
-    tryFreezePopupPerformanceSample();
-  }
-}
-
-function ingestPopupLongTaskEntries(entries, ignoreFrozen = false) {
-  if (popupPerformance.freezeStarted && !ignoreFrozen) {
-    return;
-  }
-
-  Array.from(entries || []).forEach((entry) => {
-    if (entry && Number.isFinite(entry.startTime) && Number.isFinite(entry.duration)) {
-      popupPerformance.longTasks.push({
-        start: entry.startTime,
-        duration: entry.duration
-      });
-    }
-  });
-}
-
-function setupPopupPerformanceObservers() {
-  if (!popupPerformance.enabled || typeof PerformanceObserver !== 'function') {
-    popupPerformance.measurementPartial = true;
-    return;
-  }
-
-  try {
-    popupPerformance.paintObserver = new PerformanceObserver((list) => {
-      ingestPopupPaintEntries(list.getEntries());
-    });
-    popupPerformance.paintObserver.observe({ type: 'paint', buffered: true });
-    popupPerformance.paintSupported = true;
-  } catch (error) {
-    popupPerformance.paintObserver = null;
-    popupPerformance.measurementPartial = true;
-  }
-
-  try {
-    popupPerformance.longTaskObserver = new PerformanceObserver((list) => {
-      ingestPopupLongTaskEntries(list.getEntries());
-    });
-    popupPerformance.longTaskObserver.observe({ type: 'longtask', buffered: true });
-    popupPerformance.longTaskSupported = true;
-  } catch (error) {
-    popupPerformance.longTaskObserver = null;
-  }
-
-  if (popupPerformance.paintSupported && typeof performance.getEntriesByType === 'function') {
-    try {
-      ingestPopupPaintEntries(performance.getEntriesByType('paint'));
-    } catch (error) {
-      popupPerformance.measurementPartial = true;
-    }
-  }
-}
-
-function capturePopupNavigationTiming() {
-  let navigation = null;
-
-  try {
-    navigation = typeof performance.getEntriesByType === 'function'
-      ? performance.getEntriesByType('navigation')[0]
-      : null;
-  } catch (error) {
-    navigation = null;
-  }
-
-  if (!navigation) {
-    popupPerformance.navigation = null;
-    popupPerformance.measurementPartial = true;
-    return;
-  }
-
-  const loadEnd = Number(navigation.loadEventEnd);
-  popupPerformance.navigation = {
-    responseEnd: Number.isFinite(navigation.responseEnd) ? navigation.responseEnd : null,
-    domContentLoadedStart: Number.isFinite(navigation.domContentLoadedEventStart)
-      ? navigation.domContentLoadedEventStart
-      : null,
-    domContentLoadedEnd: Number.isFinite(navigation.domContentLoadedEventEnd)
-      ? navigation.domContentLoadedEventEnd
-      : null,
-    domComplete: Number.isFinite(navigation.domComplete) ? navigation.domComplete : null,
-    loadEnd: loadEnd > 0 ? loadEnd : null
-  };
-
-  if (Object.values(popupPerformance.navigation).some((value) => !Number.isFinite(value))) {
-    popupPerformance.measurementPartial = true;
-  }
-}
-
-// 当前 Chromium 扩展弹窗实测不暴露 Resource Timing 条目；保留计数以识别未来浏览器行为变化。
-function capturePopupResourceTimings() {
-  popupPerformance.resourceEntryCount = null;
-  popupPerformance.resources = Object.fromEntries(
-    POPUP_PERFORMANCE_RESOURCE_NAMES.map((name) => [name, null])
-  );
-
-  try {
-    const entries = typeof performance.getEntriesByType === 'function'
-      ? performance.getEntriesByType('resource')
-      : [];
-    popupPerformance.resourceEntryCount = entries.length;
-
-    POPUP_PERFORMANCE_RESOURCE_NAMES.forEach((name) => {
-      const entry = entries.find((item) => String(item && item.name || '').endsWith(`/${name}`));
-
-      if (entry) {
-        popupPerformance.resources[name] = {
-          start: Number.isFinite(entry.startTime) ? entry.startTime : null,
-          responseEnd: Number.isFinite(entry.responseEnd) ? entry.responseEnd : null,
-          duration: Number.isFinite(entry.duration) ? entry.duration : null
-        };
-      }
-    });
-  } catch (error) {
-    // 资源计时缺失不影响既有启动样本。
-  }
-}
-
-function schedulePopupUsableFrames() {
-  if (
-    !popupPerformance.enabled
-    || popupPerformance.freezeStarted
-    || popupPerformance.usableFramesScheduled
-  ) {
-    return;
-  }
-
-  if (typeof window.requestAnimationFrame !== 'function') {
-    popupPerformance.status = 'unavailable';
-    popupPerformance.message = '本次可用绘制指标不可用';
-    renderPerformanceDiagnostics();
-    return;
-  }
-
-  popupPerformance.usableFramesScheduled = true;
-  window.requestAnimationFrame(() => {
-    recordPopupPerformancePoint('usableReadyToPaint');
-    window.requestAnimationFrame(() => {
-      recordPopupPerformancePoint('usablePaintOpportunity');
-      tryFreezePopupPerformanceSample();
-    });
-  });
-}
-
-function getPopupBrowserVersion() {
-  try {
-    const match = String(navigator.userAgent || '').match(/(?:Chrome|Chromium)\/[^\s]+/);
-    return match ? match[0] : null;
-  } catch (error) {
-    return null;
-  }
-}
-
-function getPopupExtensionVersion() {
-  try {
-    const manifest = chrome.runtime.getManifest();
-    return manifest && manifest.version ? String(manifest.version) : null;
-  } catch (error) {
-    return null;
-  }
-}
-
-function serializePopupPerformanceStage(name) {
-  const stage = popupPerformance.stages[name];
-
-  if (!stage) {
-    return {
-      start: null,
-      end: null,
-      duration: null,
-      outcome: 'not-started',
-      count: null
-    };
-  }
-
-  return {
-    start: roundPopupPerformanceNumber(stage.start),
-    end: roundPopupPerformanceNumber(stage.end),
-    duration: roundPopupPerformanceNumber(stage.duration),
-    outcome: stage.outcome,
-    count: Number.isFinite(stage.count) ? stage.count : null
-  };
-}
-
-function serializePopupPerformanceNavigation() {
-  if (!popupPerformance.navigation) {
-    return {
-      responseEnd: null,
-      domContentLoadedStart: null,
-      domContentLoadedEnd: null,
-      domComplete: null,
-      loadEnd: null
-    };
-  }
-
-  return {
-    responseEnd: roundPopupPerformanceNumber(popupPerformance.navigation.responseEnd),
-    domContentLoadedStart: roundPopupPerformanceNumber(popupPerformance.navigation.domContentLoadedStart),
-    domContentLoadedEnd: roundPopupPerformanceNumber(popupPerformance.navigation.domContentLoadedEnd),
-    domComplete: roundPopupPerformanceNumber(popupPerformance.navigation.domComplete),
-    loadEnd: roundPopupPerformanceNumber(popupPerformance.navigation.loadEnd)
-  };
-}
-
-function buildPopupPerformanceSnapshot(navigationToUsable) {
-  const rawPoints = popupPerformance.points;
-  const rawNavigation = popupPerformance.navigation || {};
-  const rawRenderStage = popupPerformance.stages.render || {};
-  const stages = Object.fromEntries(POPUP_PERFORMANCE_STAGE_NAMES.map((name) => [
-    name,
-    serializePopupPerformanceStage(name)
-  ]));
-  const points = {
-    groupingScriptStart: roundPopupPerformanceNumber(popupPerformance.points.groupingScriptStart),
-    groupingScriptEnd: roundPopupPerformanceNumber(popupPerformance.points.groupingScriptEnd),
-    scriptStart: roundPopupPerformanceNumber(popupPerformance.points.scriptStart),
-    popupScriptEnd: roundPopupPerformanceNumber(popupPerformance.points.popupScriptEnd),
-    domContentLoadedHandlerStart: roundPopupPerformanceNumber(popupPerformance.points.domContentLoadedHandlerStart),
-    windowLoad: roundPopupPerformanceNumber(popupPerformance.points.windowLoad),
-    loadStateStart: roundPopupPerformanceNumber(popupPerformance.points.loadStateStart),
-    stateReady: roundPopupPerformanceNumber(popupPerformance.points.stateReady),
-    controlsReady: roundPopupPerformanceNumber(popupPerformance.points.controlsReady),
-    usableReadyToPaint: roundPopupPerformanceNumber(popupPerformance.points.usableReadyToPaint),
-    usablePaintOpportunity: roundPopupPerformanceNumber(popupPerformance.points.usablePaintOpportunity),
-    firstPaint: roundPopupPerformanceNumber(popupPerformance.points.firstPaint),
-    firstContentfulPaint: roundPopupPerformanceNumber(popupPerformance.points.firstContentfulPaint)
-  };
-  const resources = Object.fromEntries(POPUP_PERFORMANCE_RESOURCE_NAMES.map((name) => {
-    const resource = popupPerformance.resources[name] || {};
-    return [name, {
-      start: roundPopupPerformanceNumber(resource.start),
-      responseEnd: roundPopupPerformanceNumber(resource.responseEnd),
-      duration: roundPopupPerformanceNumber(resource.duration)
-    }];
-  }));
-  const eligibleLongTasks = popupPerformance.longTasks.filter((entry) => {
-    return Number.isFinite(rawPoints.scriptStart)
-      && entry.start >= rawPoints.scriptStart
-      && (!Number.isFinite(navigationToUsable) || entry.start <= navigationToUsable);
-  });
-  const longTaskDurations = eligibleLongTasks.map((entry) => entry.duration);
-  const renderEnd = stages.render.end;
-  const fcp = points.firstContentfulPaint;
-  const navigation = serializePopupPerformanceNavigation();
-  const hasRequiredPoints = [
-    points.groupingScriptStart,
-    points.groupingScriptEnd,
-    points.scriptStart,
-    points.popupScriptEnd,
-    points.domContentLoadedHandlerStart,
-    points.windowLoad,
-    points.loadStateStart,
-    points.stateReady,
-    points.controlsReady,
-    points.usableReadyToPaint,
-    points.usablePaintOpportunity
-  ].every(Number.isFinite);
-  const hasPaintPoints = !popupPerformance.paintSupported
-    || (Number.isFinite(points.firstPaint) && Number.isFinite(fcp));
-  const measurementPartial = popupPerformance.measurementPartial
-    || Object.values(navigation).some((value) => !Number.isFinite(value))
-    || !hasRequiredPoints
-    || !Number.isFinite(renderEnd)
-    || !hasPaintPoints;
-
-  return {
-    schemaVersion: POPUP_PERFORMANCE_SCHEMA_VERSION,
-    recordedAt: new Date().toISOString(),
-    extensionVersion: getPopupExtensionVersion(),
-    browserVersion: getPopupBrowserVersion(),
-    session: {
-      id: null,
-      recordedPopupIndex: null,
-      firstRecordedPopup: null
-    },
-    visibility: typeof document.visibilityState === 'string' ? document.visibilityState : null,
-    navigation,
-    resourceEntryCount: Number.isFinite(popupPerformance.resourceEntryCount)
-      ? popupPerformance.resourceEntryCount
-      : null,
-    resources,
-    points,
-    context: {
-      currentTabCount: Number.isFinite(popupPerformance.context.currentTabCount)
-        ? popupPerformance.context.currentTabCount
-        : null,
-      allTabCount: Number.isFinite(popupPerformance.context.allTabCount)
-        ? popupPerformance.context.allTabCount
-        : null,
-      windowCount: Number.isFinite(popupPerformance.context.windowCount)
-        ? popupPerformance.context.windowCount
-        : null
-    },
-    stages,
-    longTasks: {
-      supported: popupPerformance.longTaskSupported,
-      count: eligibleLongTasks.length,
-      totalDuration: roundPopupPerformanceNumber(
-        longTaskDurations.reduce((total, duration) => total + duration, 0)
-      ),
-      maxDuration: roundPopupPerformanceNumber(
-        longTaskDurations.length > 0 ? Math.max(...longTaskDurations) : 0
-      ),
-      entries: eligibleLongTasks.slice(0, 20).map((entry) => ({
-        start: roundPopupPerformanceNumber(entry.start),
-        duration: roundPopupPerformanceNumber(entry.duration)
-      }))
-    },
-    outcome: {
-      startup: popupPerformance.startupOutcome,
-      measurement: measurementPartial ? 'partial' : 'complete'
-    },
-    derived: {
-      responseToGrouping: getPopupPerformanceDifference(
-        rawPoints.groupingScriptStart,
-        rawNavigation.responseEnd
-      ),
-      groupingEvaluation: getPopupPerformanceDifference(
-        rawPoints.groupingScriptEnd,
-        rawPoints.groupingScriptStart
-      ),
-      groupingToPopup: getPopupPerformanceDifference(
-        rawPoints.scriptStart,
-        rawPoints.groupingScriptEnd
-      ),
-      renderToUsable: getPopupPerformanceDifference(navigationToUsable, rawRenderStage.end),
-      controlsToUsable: getPopupPerformanceDifference(navigationToUsable, rawPoints.controlsReady),
-      navigationToUsable: roundPopupPerformanceNumber(navigationToUsable),
-      postRenderFcpDelay: Number.isFinite(rawPoints.firstContentfulPaint)
-        && Number.isFinite(rawRenderStage.end)
-        && rawPoints.firstContentfulPaint >= rawRenderStage.end
-        ? getPopupPerformanceDifference(rawPoints.firstContentfulPaint, rawRenderStage.end)
-        : null,
-      navigationToFcp: roundPopupPerformanceNumber(rawPoints.firstContentfulPaint)
-    }
-  };
-}
-
-function drainPopupPerformanceObserver(observer, ingest) {
-  if (!observer) {
-    return;
-  }
-
-  try {
-    ingest(observer.takeRecords(), true);
-  } catch (error) {
-    popupPerformance.measurementPartial = true;
-  }
-
-  try {
-    observer.disconnect();
-  } catch (error) {
-    popupPerformance.measurementPartial = true;
-  }
-}
-
-function freezePopupPerformanceSample() {
-  if (popupPerformance.freezeStarted) {
-    return;
-  }
-
-  popupPerformance.freezeStarted = true;
-  const fcp = popupPerformance.points.firstContentfulPaint;
-  const usablePaintOpportunity = popupPerformance.points.usablePaintOpportunity;
-  let navigationToUsable = popupPerformance.paintSupported
-    ? Math.max(fcp, usablePaintOpportunity)
-    : usablePaintOpportunity;
-
-  drainPopupPerformanceObserver(popupPerformance.paintObserver, ingestPopupPaintEntries);
-  drainPopupPerformanceObserver(popupPerformance.longTaskObserver, ingestPopupLongTaskEntries);
-
-  if (popupPerformance.paintSupported) {
-    navigationToUsable = Math.max(
-      popupPerformance.points.firstContentfulPaint,
-      usablePaintOpportunity
-    );
-  }
-
-  const snapshot = buildPopupPerformanceSnapshot(navigationToUsable);
-
-  if (popupPerformance.status !== 'cleared') {
-    popupPerformance.status = 'persisting';
-    popupPerformance.message = '正在保存本次性能记录';
-    renderPerformanceDiagnostics();
-  }
-
-  popupPerformance.persistPromise = persistPopupPerformanceSnapshot(snapshot).then((result) => {
-    if (popupPerformance.status !== 'cleared') {
-      popupPerformance.status = result.saved ? 'saved' : 'unavailable';
-      popupPerformance.message = result.saved
-        ? '本次性能记录已保存'
-        : result.suppressed
-          ? '性能记录已清除'
-          : '本次性能记录保存失败';
-      renderPerformanceDiagnostics();
-    }
-
-    return result;
-  });
-}
-
-function tryFreezePopupPerformanceSample() {
-  if (
-    !popupPerformance.enabled
-    || popupPerformance.freezeStarted
-    || !popupPerformance.initialLoadSettled
-    || !popupPerformance.loadEventSettled
-    || !Number.isFinite(popupPerformance.points.usablePaintOpportunity)
-  ) {
-    return;
-  }
-
-  if (
-    popupPerformance.paintSupported
-    && !Number.isFinite(popupPerformance.points.firstContentfulPaint)
-  ) {
-    return;
-  }
-
-  freezePopupPerformanceSample();
-}
-
-async function getNextPopupPerformanceSession() {
-  const emptySession = {
-    id: null,
-    recordedPopupIndex: null,
-    firstRecordedPopup: null
-  };
-
-  try {
-    if (
-      !chrome.storage.session
-      || typeof chrome.storage.session.get !== 'function'
-      || typeof chrome.storage.session.set !== 'function'
-    ) {
-      return emptySession;
-    }
-
-    const stored = await chrome.storage.session.get([POPUP_PERFORMANCE_SESSION_KEY]);
-    const previous = stored && stored[POPUP_PERFORMANCE_SESSION_KEY];
-    const previousIndex = Number(previous && previous.recordedPopupIndex);
-    const recordedPopupIndex = Number.isInteger(previousIndex) && previousIndex >= 1
-      ? previousIndex + 1
-      : 1;
-    let id = previous && typeof previous.id === 'string' ? previous.id : '';
-
-    if (!id) {
-      if (!globalThis.crypto || typeof globalThis.crypto.randomUUID !== 'function') {
-        return emptySession;
-      }
-
-      id = globalThis.crypto.randomUUID();
-    }
-
-    await chrome.storage.session.set({
-      [POPUP_PERFORMANCE_SESSION_KEY]: { id, recordedPopupIndex }
-    });
-
-    return {
-      id,
-      recordedPopupIndex,
-      firstRecordedPopup: recordedPopupIndex === 1
-    };
-  } catch (error) {
-    return emptySession;
-  }
-}
-
-function getPopupPerformanceSamplesFromStored(stored) {
-  const history = stored && stored[POPUP_PERFORMANCE_HISTORY_KEY];
-
-  if (
-    !history
-    || history.schemaVersion !== POPUP_PERFORMANCE_SCHEMA_VERSION
-    || !Array.isArray(history.samples)
-  ) {
-    return [];
-  }
-
-  return history.samples.filter((sample) => sample && typeof sample === 'object');
-}
-
-async function readPopupPerformanceSamples() {
-  const stored = await chrome.storage.local.get([POPUP_PERFORMANCE_HISTORY_KEY]);
-  return getPopupPerformanceSamplesFromStored(stored);
-}
-
-async function persistPopupPerformanceSnapshot(snapshot) {
-  const session = await getNextPopupPerformanceSession();
-  const sample = Object.assign({}, snapshot, { session });
-
-  if (popupPerformance.clearPromise) {
-    const cleared = await popupPerformance.clearPromise;
-
-    if (cleared) {
-      return { saved: false, suppressed: true };
-    }
-  }
-
-  if (popupPerformance.suppressCurrentHistory) {
-    return { saved: false, suppressed: true };
-  }
-
-  try {
-    const stored = await chrome.storage.local.get([POPUP_PERFORMANCE_HISTORY_KEY]);
-
-    if (popupPerformance.suppressCurrentHistory) {
-      return { saved: false, suppressed: true };
-    }
-
-    const samples = getPopupPerformanceSamplesFromStored(stored)
-      .concat(sample)
-      .sort((left, right) => String(left.recordedAt || '').localeCompare(String(right.recordedAt || '')))
-      .slice(-POPUP_PERFORMANCE_HISTORY_LIMIT);
-
-    await chrome.storage.local.set({
-      [POPUP_PERFORMANCE_HISTORY_KEY]: {
-        schemaVersion: POPUP_PERFORMANCE_SCHEMA_VERSION,
-        samples
-      }
-    });
-
-    return { saved: true, suppressed: false };
-  } catch (error) {
-    return { saved: false, suppressed: false };
-  }
-}
-
-setupPopupPerformanceObservers();
-
-if (
-  popupPerformance.enabled
-  && typeof window !== 'undefined'
-  && typeof window.addEventListener === 'function'
-) {
-  window.addEventListener('load', () => {
-    recordPopupPerformancePoint('windowLoad');
-    window.setTimeout(() => {
-      capturePopupNavigationTiming();
-      capturePopupResourceTimings();
-      popupPerformance.loadEventSettled = true;
-      tryFreezePopupPerformanceSample();
-    }, 0);
-  }, { once: true });
-}
-
 const DEFAULT_COLOR_SCHEME = 'teal';
 const COLOR_SCHEMES = Object.freeze({
   teal: '松石青',
@@ -812,10 +17,9 @@ const state = {
     groupRules: []
   },
   overview: {
-    tabCount: 0,
-    domainCount: 0,
-    duplicateCount: 0,
-    groupCount: 0
+    allTabCount: 0,
+    windowCount: 0,
+    duplicateCount: 0
   },
   duplicateReview: {
     // 扫描结果作为确认快照保存，避免用户勾选期间因刷新状态改变待关闭范围。
@@ -828,15 +32,14 @@ const state = {
   // 后台保存一次性清理令牌，弹窗只持有令牌摘要，避免直接信任可能过期的标签编号。
   pendingCleanup: null,
   currentWindowId: null,
+  openShortcut: '',
   query: '',
   visibleTabs: [],
   selectedIndex: 0,
   colorScheme: DEFAULT_COLOR_SCHEME,
   moreToolsVisible: false,
-  performanceDiagnosticsVisible: false,
-  performanceDiagnosticsOperationRunning: false,
-  performanceDiagnosticsText: '',
   busy: false,
+  loadVersion: 0,
   recentlyClosedTabsLoaded: false,
   recentlyClosedTabsLoading: false,
   recentlyClosedTabsVersion: 0,
@@ -862,7 +65,6 @@ const SEARCH_RESULT_LIMIT = 100;
 const DUPLICATE_REVIEW_SCROLL_OPTIONS = { block: 'start', inline: 'nearest' };
 const POPUP_STORAGE_KEYS = {
   settings: 'tabgod.settings',
-  recentAccess: 'tabgod.recentAccess',
   colorScheme: 'tabgod.colorScheme'
 };
 const GROUPING = globalThis.TabGodGrouping;
@@ -877,20 +79,9 @@ function sendMessage(action, payload = {}) {
   });
 }
 
-function getPopupLastAccessedAt(tab, recentAccessMap) {
-  if (Number.isFinite(tab && tab.lastAccessed)) {
-    return tab.lastAccessed;
-  }
-
-  const storedAccessedAt = Number(recentAccessMap && recentAccessMap[String(tab && tab.id)]);
-
-  return Number.isFinite(storedAccessedAt) ? storedAccessedAt : 0;
-}
-
 function buildPopupTabSnapshots(tabs, context = {}) {
   const safeTabs = Array.isArray(tabs) ? tabs : [];
   const currentWindowId = Number.isInteger(context.currentWindowId) ? context.currentWindowId : null;
-  const recentAccessMap = context.recentAccessMap || {};
   // 分组键和显示名来自共享领域逻辑，弹窗这里只补充浏览器窗口和声音状态。
   const normalizedSettings = context.normalizedSettings || GROUPING.normalizeSettings(context.settings);
   const snapshots = GROUPING.buildTabSnapshotsFromNormalizedSettings(safeTabs, normalizedSettings);
@@ -904,91 +95,55 @@ function buildPopupTabSnapshots(tabs, context = {}) {
       windowId: Number.isInteger(sourceTab.windowId) ? sourceTab.windowId : null,
       isCurrentWindow,
       windowLabel: isCurrentWindow ? '当前窗口' : '其他窗口',
-      lastAccessedAt: getPopupLastAccessedAt(sourceTab, recentAccessMap)
+      lastAccessedAt: Number.isFinite(sourceTab.lastAccessed) ? sourceTab.lastAccessed : 0
     });
   });
 }
 
-function buildPopupOverview(currentTabs, allTabs) {
-  const domainSet = new Set();
-  const groupSet = new Set();
-
-  (Array.isArray(currentTabs) ? currentTabs : []).forEach((tab) => {
-    domainSet.add(GROUPING.getDomainKey(GROUPING.getTabUrl(tab)));
-
-    if (typeof tab.groupId === 'number' && tab.groupId >= 0) {
-      groupSet.add(tab.groupId);
-    }
-  });
-
-  const windowCount = new Set((Array.isArray(allTabs) ? allTabs : [])
+function buildPopupOverview(allTabs) {
+  const safeTabs = Array.isArray(allTabs) ? allTabs : [];
+  const windowCount = new Set(safeTabs
     .map((tab) => tab.windowId)
     .filter((windowId) => Number.isInteger(windowId))).size;
 
   return {
-    tabCount: Array.isArray(currentTabs) ? currentTabs.length : 0,
-    domainCount: domainSet.size,
-    duplicateCount: null,
-    groupCount: groupSet.size,
-    allTabCount: Array.isArray(allTabs) ? allTabs.length : 0,
-    windowCount
+    allTabCount: safeTabs.length,
+    windowCount,
+    duplicateCount: null
   };
 }
 
-async function loadPopupStateFromBrowser() {
-  const [currentTabs, allTabs, stored] = await measurePopupPerformanceCall(
-    'browserStateRead',
-    () => Promise.all([
-      measurePopupPerformanceCall(
-        'currentTabs',
-        () => chrome.tabs.query({ currentWindow: true }),
-        (tabs) => Array.isArray(tabs) ? tabs.length : null
-      ),
-      measurePopupPerformanceCall(
-        'allTabs',
-        () => chrome.tabs.query({}),
-        (tabs) => Array.isArray(tabs) ? tabs.length : null
-      ),
-      measurePopupPerformanceCall(
-        'storage',
-        async () => {
-          const values = await chrome.storage.local.get([
-            POPUP_STORAGE_KEYS.settings,
-            POPUP_STORAGE_KEYS.recentAccess,
-            POPUP_STORAGE_KEYS.colorScheme
-          ]);
-          applyColorScheme(values[POPUP_STORAGE_KEYS.colorScheme]);
-          return values;
-        },
-        (values) => values && typeof values === 'object' ? Object.keys(values).length : null
-      )
-    ])
-  );
-
-  return measurePopupPerformanceSync('stateBuild', () => {
-    const currentWindowTab = currentTabs.find((tab) => tab.active) || currentTabs[0];
-    const currentWindowId = currentWindowTab && Number.isInteger(currentWindowTab.windowId)
-      ? currentWindowTab.windowId
-      : null;
-    const settings = GROUPING.normalizeSettings(stored[POPUP_STORAGE_KEYS.settings]);
-    const recentAccessMap = stored[POPUP_STORAGE_KEYS.recentAccess] || {};
-    const overview = buildPopupOverview(currentTabs, allTabs);
-
-    popupPerformance.context.currentTabCount = currentTabs.length;
-    popupPerformance.context.allTabCount = allTabs.length;
-    popupPerformance.context.windowCount = overview.windowCount;
-
-    return {
-      tabs: buildPopupTabSnapshots(allTabs, { currentWindowId, recentAccessMap, normalizedSettings: settings }),
-      recentlyClosedTabs: [],
-      groups: [],
-      overview,
-      sessions: [],
-      settings,
-      colorScheme: normalizeColorScheme(stored[POPUP_STORAGE_KEYS.colorScheme]),
-      currentWindowId
-    };
+async function loadPopupStateFromBrowser(options = {}) {
+  const storedPromise = chrome.storage.local.get([
+    POPUP_STORAGE_KEYS.settings,
+    POPUP_STORAGE_KEYS.colorScheme
+  ]).then((values) => {
+    applyColorScheme(values[POPUP_STORAGE_KEYS.colorScheme]);
+    return values;
   });
+  const currentTabsPromise = chrome.tabs.query(options.currentWindowOnly
+    ? { currentWindow: true }
+    : { currentWindow: true, active: true });
+  const [currentTabs, allTabs, stored] = await Promise.all([
+    currentTabsPromise,
+    options.currentWindowOnly ? currentTabsPromise : chrome.tabs.query({}),
+    storedPromise
+  ]);
+  const currentWindowId = Number.isInteger(currentTabs[0] && currentTabs[0].windowId)
+    ? currentTabs[0].windowId
+    : null;
+  const settings = GROUPING.normalizeSettings(stored[POPUP_STORAGE_KEYS.settings]);
+
+  return {
+    tabs: buildPopupTabSnapshots(allTabs, { currentWindowId, normalizedSettings: settings }),
+    recentlyClosedTabs: [],
+    groups: [],
+    overview: buildPopupOverview(allTabs),
+    sessions: [],
+    settings,
+    colorScheme: normalizeColorScheme(stored[POPUP_STORAGE_KEYS.colorScheme]),
+    currentWindowId
+  };
 }
 
 const COMMAND_SHORTCUT_HINTS = [
@@ -1037,22 +192,20 @@ function renderCommandShortcut(commandName, shortcutText) {
 }
 
 async function loadCommandShortcuts() {
+  state.openShortcut = '';
+
   if (!chrome.commands || typeof chrome.commands.getAll !== 'function') {
-    markPopupPerformanceStageUnsupported('commands');
     COMMAND_SHORTCUT_HINTS.forEach((hint) => renderCommandShortcut(hint.commandName, '读取失败'));
     return;
   }
 
   try {
-    const commands = await measurePopupPerformanceCall(
-      'commands',
-      () => chrome.commands.getAll(),
-      (values) => Array.isArray(values) ? values.length : null
-    );
+    const commands = await chrome.commands.getAll();
     const shortcutMap = new Map((Array.isArray(commands) ? commands : []).map((command) => [
       command.name,
       command.shortcut || ''
     ]));
+    state.openShortcut = shortcutMap.get('_execute_action') || '';
 
     COMMAND_SHORTCUT_HINTS.forEach((hint) => {
       renderCommandShortcut(hint.commandName, shortcutMap.get(hint.commandName) || '');
@@ -1061,6 +214,27 @@ async function loadCommandShortcuts() {
     // 快捷键提示是辅助信息，读取失败不能阻塞搜索和整理主流程。
     COMMAND_SHORTCUT_HINTS.forEach((hint) => renderCommandShortcut(hint.commandName, '读取失败'));
   }
+}
+
+function handlePopupShortcutKeydown(event) {
+  const shortcutParts = state.openShortcut.toLowerCase().split('+');
+  const shortcutKey = shortcutParts.pop();
+  const eventKeyAliases = { ' ': 'space', ',': 'comma', '.': 'period' };
+  const eventKey = eventKeyAliases[event.key] || String(event.key || '').toLowerCase();
+
+  if (
+    !shortcutKey
+    || eventKey !== shortcutKey
+    || Boolean(event.altKey) !== shortcutParts.includes('alt')
+    || Boolean(event.ctrlKey) !== (shortcutParts.includes('ctrl') || shortcutParts.includes('macctrl'))
+    || Boolean(event.metaKey) !== (shortcutParts.includes('command') || shortcutParts.includes('search'))
+    || Boolean(event.shiftKey) !== shortcutParts.includes('shift')
+  ) {
+    return;
+  }
+
+  event.preventDefault();
+  window.close();
 }
 
 function resetRecentlyClosedTabsCache() {
@@ -1091,30 +265,23 @@ function bindRecentlyClosedSessionEvents() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  recordPopupPerformancePoint('domContentLoadedHandlerStart');
   bindEvents();
   bindRecentlyClosedSessionEvents();
   loadCommandShortcuts();
-  loadState();
+  loadState({ progressive: true });
 });
 
 async function loadState(options = {}) {
-  const isInitialLoad = !popupPerformance.initialLoadStarted;
-  let loadStateStageStart = null;
-
-  if (isInitialLoad) {
-    popupPerformance.initialLoadStarted = true;
-    recordPopupPerformancePoint('loadStateStart');
-    loadStateStageStart = beginPopupPerformanceStage('loadState');
-  }
-
+  const loadVersion = ++state.loadVersion;
   setBusy(true);
 
   try {
-    const data = await loadPopupStateFromBrowser();
-    if (isInitialLoad) {
-      recordPopupPerformancePoint('stateReady');
+    const data = await loadPopupStateFromBrowser({ currentWindowOnly: options.progressive });
+
+    if (loadVersion !== state.loadVersion) {
+      return;
     }
+
     state.tabs = data.tabs || [];
     state.currentWindowId = Number.isInteger(data.currentWindowId) ? data.currentWindowId : null;
 
@@ -1125,11 +292,7 @@ async function loadState(options = {}) {
 
     state.settings = data.settings || state.settings;
     state.overview = data.overview || state.overview;
-    if (isInitialLoad) {
-      measurePopupPerformanceSync('render', render);
-    } else {
-      render();
-    }
+    render();
 
     if (options.keepMoreToolsFocus) {
       focusMoreTools();
@@ -1144,6 +307,10 @@ async function loadState(options = {}) {
       setStatus('');
     }
 
+    if (options.progressive) {
+      loadAllTabsAfterInitialRender(loadVersion);
+    }
+
     if (state.moreToolsVisible) {
       await loadManagementState({ skipBusy: true, keepStatus: true });
     }
@@ -1152,24 +319,38 @@ async function loadState(options = {}) {
       scheduleDuplicateOverviewLoad();
     }
   } catch (error) {
-    if (isInitialLoad) {
-      popupPerformance.startupOutcome = 'error';
+    if (loadVersion === state.loadVersion) {
+      setStatus(error.message || '读取标签页失败');
     }
-    setStatus(error.message || '读取标签页失败');
   } finally {
-    setBusy(false);
-
-    if (isInitialLoad) {
-      recordPopupPerformancePoint('controlsReady');
-      finishPopupPerformanceStage(
-        'loadState',
-        loadStateStageStart,
-        popupPerformance.startupOutcome
-      );
-      popupPerformance.initialLoadSettled = true;
-      schedulePopupUsableFrames();
+    if (loadVersion === state.loadVersion) {
+      setBusy(false);
     }
   }
+}
+
+function loadAllTabsAfterInitialRender(loadVersion) {
+  window.setTimeout(async () => {
+    try {
+      const allTabs = await chrome.tabs.query({});
+
+      if (loadVersion !== state.loadVersion) {
+        return;
+      }
+
+      state.tabs = buildPopupTabSnapshots(allTabs, {
+        currentWindowId: state.currentWindowId,
+        normalizedSettings: state.settings
+      });
+      state.overview = Object.assign(buildPopupOverview(allTabs), {
+        duplicateCount: state.overview.duplicateCount
+      });
+      renderOverview();
+      renderTabs();
+    } catch (error) {
+      // 全窗口搜索只是首屏增强，读取失败时保留当前窗口结果。
+    }
+  }, 0);
 }
 
 function scheduleDuplicateOverviewLoad() {
@@ -1275,11 +456,7 @@ async function loadManagementState(options = {}) {
 
 async function loadDuplicateOverview() {
   try {
-    const data = await measurePopupPerformanceCall(
-      'duplicateOverview',
-      () => sendMessage('get-duplicate-overview'),
-      () => 1
-    );
+    const data = await sendMessage('get-duplicate-overview');
     state.overview = Object.assign({}, state.overview, {
       duplicateCount: Number(data.duplicateCount) || 0
     });
@@ -1294,6 +471,7 @@ async function loadDuplicateOverview() {
 }
 
 function bindEvents() {
+  document.addEventListener('keydown', handlePopupShortcutKeydown);
   document.getElementById('organizeButton').addEventListener('click', () => runAction('organize-tabs'));
   document.getElementById('scanDuplicatesButton').addEventListener('click', scanDuplicates);
   document.getElementById('duplicateHintText').addEventListener('click', scanDuplicates);
@@ -1321,9 +499,6 @@ function bindEvents() {
   document.getElementById('searchInput').addEventListener('keydown', handleSearchKeydown);
   document.getElementById('searchResultList').addEventListener('keydown', handleSearchResultListKeydown);
   document.getElementById('sortHelpButton').addEventListener('click', toggleSortHelp);
-  document.getElementById('performanceDiagnosticsButton').addEventListener('click', togglePerformanceDiagnostics);
-  document.getElementById('copyPerformanceDiagnosticsButton').addEventListener('click', copyPerformanceDiagnostics);
-  document.getElementById('clearPerformanceDiagnosticsButton').addEventListener('click', clearPerformanceDiagnostics);
   document.getElementById('moreToolsButton').addEventListener('click', toggleMoreTools);
   document.querySelectorAll('input[name="colorScheme"]').forEach((input) => {
     input.addEventListener('change', () => {
@@ -1473,7 +648,7 @@ async function openSearchResult(result) {
       return;
     }
 
-    const restoreResult = await runAction('restore-closed-session', { sessionId: result.sessionId });
+    const restoreResult = await runAction('restore-closed-session', { sessionId: result.sessionId }, { refresh: false });
 
     if (restoreResult) {
       invalidateRecentlyClosedTabs();
@@ -1493,7 +668,7 @@ async function openSearchResult(result) {
     return;
   }
 
-  await runAction('activate-tab', { tabId: result.id });
+  await runAction('activate-tab', { tabId: result.id }, { refresh: false });
 }
 
 function isCurrentPage(tab) {
@@ -1720,146 +895,6 @@ async function openShortcutSettings() {
   }
 }
 
-function togglePerformanceDiagnostics() {
-  state.performanceDiagnosticsVisible = !state.performanceDiagnosticsVisible;
-  renderPerformanceDiagnostics();
-
-  const section = document.getElementById('performanceDiagnosticsSection');
-  if (
-    state.performanceDiagnosticsVisible
-    && section
-    && typeof section.scrollIntoView === 'function'
-  ) {
-    section.scrollIntoView({ block: 'nearest' });
-  }
-}
-
-function buildPopupPerformanceExport(samples) {
-  return {
-    format: POPUP_PERFORMANCE_EXPORT_FORMAT,
-    schemaVersion: POPUP_PERFORMANCE_SCHEMA_VERSION,
-    exportedAt: new Date().toISOString(),
-    sampleCount: samples.length,
-    samples
-  };
-}
-
-async function copyPerformanceDiagnostics() {
-  if (state.performanceDiagnosticsOperationRunning) {
-    return;
-  }
-
-  if (popupPerformance.status === 'collecting') {
-    popupPerformance.message = '本次记录仍在采集，请稍后重试';
-    renderPerformanceDiagnostics();
-    return;
-  }
-
-  state.performanceDiagnosticsOperationRunning = true;
-  popupPerformance.message = popupPerformance.status === 'persisting'
-    ? '正在等待本次性能记录保存'
-    : '正在读取性能记录';
-  renderPerformanceDiagnostics();
-
-  try {
-    if (popupPerformance.status === 'persisting' && popupPerformance.persistPromise) {
-      await popupPerformance.persistPromise;
-    }
-
-    const samples = await readPopupPerformanceSamples();
-    const text = JSON.stringify(buildPopupPerformanceExport(samples), null, 2);
-
-    try {
-      if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
-        throw new Error('clipboard unavailable');
-      }
-
-      await navigator.clipboard.writeText(text);
-      state.performanceDiagnosticsText = '';
-      popupPerformance.message = `已复制 ${samples.length} 条性能记录`;
-    } catch (error) {
-      state.performanceDiagnosticsText = text;
-      popupPerformance.message = '自动复制失败，请从下方文本框手动复制';
-    }
-  } catch (error) {
-    popupPerformance.message = '读取性能记录失败';
-  } finally {
-    state.performanceDiagnosticsOperationRunning = false;
-    renderPerformanceDiagnostics();
-
-    const textArea = document.getElementById('performanceDiagnosticsText');
-    if (state.performanceDiagnosticsText && textArea) {
-      if (typeof textArea.focus === 'function') {
-        textArea.focus();
-      }
-      if (typeof textArea.select === 'function') {
-        textArea.select();
-      }
-    }
-  }
-}
-
-async function clearPerformanceDiagnostics() {
-  if (
-    state.performanceDiagnosticsOperationRunning
-    || popupPerformance.status === 'cleared'
-    || !window.confirm('确定清除本机保存的全部弹窗性能记录吗？')
-  ) {
-    return;
-  }
-
-  const pendingPersist = popupPerformance.persistPromise;
-  const previousStatus = popupPerformance.status;
-  let fallbackStatus = previousStatus;
-  let settleClear = null;
-  const clearPromise = pendingPersist ? null : new Promise((resolve) => {
-    settleClear = resolve;
-  });
-
-  popupPerformance.clearPromise = clearPromise;
-  // 已开始持久化时先让它完成再删除；尚在采集时才抑制未来写入。
-  popupPerformance.suppressCurrentHistory = Boolean(clearPromise);
-  state.performanceDiagnosticsOperationRunning = true;
-  popupPerformance.message = '正在清除性能记录';
-  renderPerformanceDiagnostics();
-
-  try {
-    if (pendingPersist) {
-      await pendingPersist;
-      fallbackStatus = popupPerformance.status;
-    }
-
-    await chrome.storage.local.remove(POPUP_PERFORMANCE_HISTORY_KEY);
-    popupPerformance.suppressCurrentHistory = true;
-    popupPerformance.status = 'cleared';
-    popupPerformance.message = '性能记录已清除';
-    state.performanceDiagnosticsText = '';
-    if (settleClear) {
-      settleClear(true);
-    }
-  } catch (error) {
-    popupPerformance.suppressCurrentHistory = false;
-    if (settleClear) {
-      settleClear(false);
-    }
-
-    const laterPersist = popupPerformance.persistPromise;
-    if (clearPromise && laterPersist && laterPersist !== pendingPersist) {
-      await laterPersist;
-      fallbackStatus = popupPerformance.status;
-    }
-
-    popupPerformance.status = fallbackStatus;
-    popupPerformance.message = '清除失败，原记录已保留';
-  } finally {
-    if (popupPerformance.clearPromise === clearPromise) {
-      popupPerformance.clearPromise = null;
-    }
-    state.performanceDiagnosticsOperationRunning = false;
-    renderPerformanceDiagnostics();
-  }
-}
-
 function toggleSortHelp() {
   state.sortHelpVisible = !state.sortHelpVisible;
   renderSortHelp();
@@ -1896,32 +931,6 @@ function renderMoreTools() {
     // 高级管理在结果列表下方，展开后滚入视野，避免用户误以为点击没有反应。
     section.scrollIntoView({ block: 'nearest' });
   }
-}
-
-function renderPerformanceDiagnostics() {
-  const section = document.getElementById('performanceDiagnosticsSection');
-  const toggleButton = document.getElementById('performanceDiagnosticsButton');
-  const status = document.getElementById('performanceDiagnosticsStatus');
-  const copyButton = document.getElementById('copyPerformanceDiagnosticsButton');
-  const clearButton = document.getElementById('clearPerformanceDiagnosticsButton');
-  const textArea = document.getElementById('performanceDiagnosticsText');
-
-  if (!section || !toggleButton || !status || !copyButton || !clearButton || !textArea) {
-    return;
-  }
-
-  section.classList.toggle('is-hidden', !state.performanceDiagnosticsVisible);
-  section.hidden = !state.performanceDiagnosticsVisible;
-  toggleButton.textContent = state.performanceDiagnosticsVisible ? '收起性能诊断' : '性能诊断';
-  toggleButton.setAttribute('aria-expanded', state.performanceDiagnosticsVisible ? 'true' : 'false');
-  status.textContent = popupPerformance.message || '正在采集本次性能记录';
-  copyButton.disabled = state.busy || state.performanceDiagnosticsOperationRunning;
-  clearButton.disabled = state.busy
-    || state.performanceDiagnosticsOperationRunning
-    || popupPerformance.status === 'cleared';
-  textArea.value = state.performanceDiagnosticsText;
-  textArea.classList.toggle('is-hidden', !state.performanceDiagnosticsText);
-  textArea.hidden = !state.performanceDiagnosticsText;
 }
 
 function toggleManagementPanel(panelName) {
@@ -2153,7 +1162,6 @@ function render() {
   }
   renderDuplicateReview();
   renderTabs();
-  renderPerformanceDiagnostics();
   renderMoreTools();
 }
 
@@ -3003,7 +2011,7 @@ function renderSessions() {
       <div class="session-row">
         <div class="session-name" title="${escapeHtml(session.name)}">${session.favorite ? '★ ' : ''}${escapeHtml(session.name)}</div>
       </div>
-      <div class="session-meta">${session.tabs.length} 个标签 · ${session.groups.length} 个分组 · ${formatTimestamp(session.createdAt)}</div>
+      <div class="session-meta">${session.tabCount} 个标签 · ${session.groupCount} 个分组 · ${formatTimestamp(session.createdAt)}</div>
       <div class="inline-actions session-actions">
         <button type="button" data-action="restore" data-session-id="${escapeHtml(session.id)}">恢复</button>
         <button type="button" data-action="restore-new-window" data-session-id="${escapeHtml(session.id)}">新窗口</button>
@@ -3141,10 +2149,6 @@ function normalizeSearchText(value) {
   return String(value || '').normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-function getSearchTokens(value) {
-  return normalizeSearchText(value).split(/\s+/).filter(Boolean);
-}
-
 function isAsciiToken(value) {
   return /^[a-z0-9]+$/.test(value);
 }
@@ -3155,7 +2159,7 @@ function isSubsequenceMatch(source, query) {
   }
 
   let queryIndex = 0;
-  const compactSource = normalizeSearchText(source).replace(/[^a-z0-9]/g, '');
+  const compactSource = source.replace(/[^a-z0-9]/g, '');
 
   for (const char of compactSource) {
     if (char === query[queryIndex]) {
@@ -3212,14 +2216,11 @@ function getTokenizedSearchMatchScore(parts, tokens) {
     : 100 + Math.round(totalScore / tokens.length);
 }
 
-function getSearchMatchScore(tab, query) {
-  const normalizedQuery = normalizeSearchText(query);
-
+function getSearchMatchScoreFromNormalizedQuery(tab, normalizedQuery, tokens) {
   if (!normalizedQuery) {
     return 0;
   }
 
-  const tokens = getSearchTokens(normalizedQuery);
   const parts = getSearchFieldParts(tab);
   const phraseScore = Math.max(
     parts.title === normalizedQuery ? 400 : 0,
@@ -3228,6 +2229,15 @@ function getSearchMatchScore(tab, query) {
   );
 
   return Math.max(phraseScore, getTokenizedSearchMatchScore(parts, tokens));
+}
+
+function getSearchMatchScore(tab, query) {
+  const normalizedQuery = normalizeSearchText(query);
+  return getSearchMatchScoreFromNormalizedQuery(
+    tab,
+    normalizedQuery,
+    normalizedQuery.split(/\s+/).filter(Boolean)
+  );
 }
 
 function normalizeSortTime(value) {
@@ -3306,6 +2316,7 @@ function getVisibleTabsFromState(sourceState) {
   }
 
   const recentlyClosedTabs = Array.isArray(sourceState.recentlyClosedTabs) ? sourceState.recentlyClosedTabs : [];
+  const tokens = query.split(/\s+/).filter(Boolean);
   const openUrls = new Set(tabs.map((tab) => tab.url).filter(Boolean));
   const searchPool = [
     ...tabs.map((tab) => Object.assign({}, tab, { resultType: 'open' })),
@@ -3314,7 +2325,7 @@ function getVisibleTabsFromState(sourceState) {
 
   return searchPool
     .map((tab) => {
-      const matchScore = getSearchMatchScore(tab, query);
+      const matchScore = getSearchMatchScoreFromNormalizedQuery(tab, query, tokens);
 
       return {
         tab,
@@ -3387,7 +2398,6 @@ function setBusy(isBusy) {
     // 部分按钮因为排序边界或唯一条件而永久禁用，忙碌态结束后不能把这些按钮误恢复。
     button.disabled = isBusy || button.dataset.staticDisabled === 'true';
   });
-  renderPerformanceDiagnostics();
 }
 
 function setStatus(text) {
@@ -3439,11 +2449,11 @@ function formatActionResult(action, result) {
     return `已整理 ${result.organizedCount} 个标签，创建 ${result.groupCount} 个分组`;
   }
 
-  if (action === 'save-session' || action === 'save-workspace') {
+  if (action === 'save-workspace') {
     return `已保存 ${result.savedCount} 个标签`;
   }
 
-  if (action === 'restore-session' || action === 'restore-workspace' || action === 'restore-workspace-new-window') {
+  if (action === 'restore-workspace' || action === 'restore-workspace-new-window') {
     const warnings = [];
 
     if (result.groupingFailed) {
@@ -3509,5 +2519,3 @@ function escapeHtml(value) {
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
 }
-
-recordPopupPerformancePoint('popupScriptEnd');

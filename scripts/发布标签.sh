@@ -88,9 +88,6 @@ if git ls-remote --exit-code --tags "$remote_name" "$tag_name" >/dev/null 2>&1; 
 fi
 
 echo "执行发布前校验"
-执行命令 node --check grouping.js
-执行命令 node --check background.js
-执行命令 node --check popup.js
 执行命令 node scripts/校验插件.js
 执行命令 git diff --check
 

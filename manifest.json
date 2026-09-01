@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "121",
   "name": "标签之神",
   "description": "搜索切换、一键整理、分组、去重和保存上百个 Chrome 标签页。",
   "version": "0.2.5",
@@ -31,8 +32,8 @@
   "commands": {
     "_execute_action": {
       "suggested_key": {
-        "default": "Ctrl+Shift+L",
-        "mac": "Command+Shift+L"
+        "default": "Ctrl+Shift+K",
+        "mac": "Command+Shift+K"
       },
       "description": "打开标签之神"
     },

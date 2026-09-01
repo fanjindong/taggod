@@ -35,7 +35,7 @@ if (manifest.manifest_version !== 3) {
   throw new Error('manifest.json 必须使用 Manifest V3');
 }
 
-assert.strictEqual(manifest.version, '0.2.5');
+assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
 
 if (!manifest.permissions.includes('tabs')
   || !manifest.permissions.includes('tabGroups')
@@ -92,12 +92,7 @@ assert.ok(popupStructureHtmlContent.includes('id="managementWorkspacePanel"'));
 assert.ok(popupStructureHtmlContent.includes('id="managementCleanupPanel"'));
 assert.ok(popupStructureHtmlContent.includes('id="managementShortcutsPanel"'));
 assert.ok(popupStructureHtmlContent.includes('id="openShortcutSettingsButton"'));
-assert.ok(popupStructureHtmlContent.includes('id="performanceDiagnosticsButton"'));
-assert.ok(popupStructureHtmlContent.includes('aria-controls="performanceDiagnosticsSection"'));
-assert.ok(popupStructureHtmlContent.includes('id="copyPerformanceDiagnosticsButton"'));
-assert.ok(popupStructureHtmlContent.includes('id="clearPerformanceDiagnosticsButton"'));
-assert.ok(popupStructureHtmlContent.includes('id="performanceDiagnosticsText"'));
-assert.ok(popupStructureHtmlContent.indexOf('id="performanceDiagnosticsSection"') > popupStructureHtmlContent.indexOf('id="moreToolsSection"'));
+assert.ok(!popupStructureHtmlContent.includes('performanceDiagnostics'));
 assert.strictEqual((popupStructureHtmlContent.match(/data-management-panel-button="/g) || []).length, 6);
 assert.strictEqual((popupStructureHtmlContent.match(/data-management-panel="/g) || []).length, 6);
 assert.strictEqual((popupStructureHtmlContent.match(/id="scanDuplicatesButton"/g) || []).length, 1);
@@ -112,11 +107,9 @@ assert.ok(popupStructureHtmlContent.includes('id="rescanDuplicatesButton"'));
 assert.ok(popupStructureHtmlContent.includes('tabindex="-1"'));
 assert.ok(popupStructureCssContent.includes('.main-organize-action'));
 assert.ok(popupStructureCssContent.includes('.secondary-action-grid'));
-assert.ok(popupStructureCssContent.includes('.management-toggle-button'));
 assert.ok(popupStructureCssContent.includes('.management-summary-button'));
 assert.ok(popupStructureCssContent.includes('.management-panel'));
-assert.ok(popupStructureCssContent.includes('.performance-diagnostics-panel'));
-assert.ok(popupStructureCssContent.includes('.performance-diagnostics-text'));
+assert.ok(!popupStructureCssContent.includes('performance-diagnostics'));
 assert.ok(popupStructureCssContent.includes('.quick-result-item'));
 assert.ok(popupStructureCssContent.includes('--primary: #0f766e;'));
 assert.ok(popupStructureCssContent.includes(':root[data-color-scheme="navy"]'));
@@ -173,9 +166,12 @@ assert.ok(popupStructureJsContent.includes('audible: Boolean(sourceTab.audible)'
 assert.ok(backgroundStructureJsContent.includes("importScripts('grouping.js')"));
 assert.ok(popupStructureHtmlContent.indexOf('src="grouping.js"') < popupStructureHtmlContent.indexOf('src="popup.js"'));
 assert.ok(releaseWorkflowContent.includes('grouping.js'));
+assert.ok(releaseWorkflowContent.includes('assets/icons/icon-128.png'));
+assert.ok(!releaseWorkflowContent.includes('            README.md \\'));
+assert.ok(!releaseWorkflowContent.includes('            assets\n'));
 assert.ok(groupingStructureJsContent.includes('function buildResolvedGroupTitleMapFromGroupInfos'));
 const batchSnapshotFunctionStart = groupingStructureJsContent.indexOf('function buildTabSnapshotsFromNormalizedSettings');
-const batchSnapshotFunctionEnd = groupingStructureJsContent.indexOf('\n  /**', batchSnapshotFunctionStart);
+const batchSnapshotFunctionEnd = groupingStructureJsContent.indexOf('\n  // 显式命名空间', batchSnapshotFunctionStart);
 const batchSnapshotFunctionSource = groupingStructureJsContent.slice(
   batchSnapshotFunctionStart,
   batchSnapshotFunctionEnd
@@ -189,6 +185,9 @@ assert.ok(!backgroundStructureJsContent.includes('function regroupRestoredTabs')
 assert.ok(!backgroundStructureJsContent.includes('function getRevalidatedDuplicateTab'));
 assert.ok(!groupingStructureJsContent.includes('organizeWithGroups'));
 assert.ok(!groupingStructureJsContent.includes('duplicateKeepStrategy'));
+assert.ok(!groupingStructureJsContent.includes('function buildTabSnapshots(tabs'));
+assert.ok(!backgroundStructureJsContent.includes('function buildOrganizedTabs(tabs'));
+assert.ok(!backgroundStructureJsContent.includes('tabgod.recentAccess'));
 assert.ok(popupStructureJsContent.includes('event.stopPropagation()'));
 assert.ok(popupStructureJsContent.includes('quick-result-close-button'));
 assert.ok(popupStructureJsContent.includes('item.appendChild(openButton)'));
@@ -201,6 +200,7 @@ assert.match(popupStructureCssContent, /\.quick-result-item\.is-selected \.quick
 assert.ok(popupStructureJsContent.includes('activeManagementPanel'));
 assert.ok(popupStructureJsContent.includes('renderManagementOverview'));
 assert.ok(popupStructureJsContent.includes('chrome.commands.getAll()'));
+assert.ok(popupStructureJsContent.includes("document.addEventListener('keydown', handlePopupShortcutKeydown)"));
 assert.ok(popupStructureJsContent.includes("chrome.tabs.create({ url: 'chrome://extensions/shortcuts' })"));
 assert.ok(popupStructureJsContent.includes('chrome.sessions.onChanged.addListener'));
 assert.ok(backgroundStructureJsContent.includes("showCommandBadge('✓'"));
@@ -277,32 +277,42 @@ const backgroundSandbox = {
         backgroundBadgeCalls.push({ type: 'color', options });
       }
     },
-    tabs: {
-      onActivated: {
-        addListener() {}
-      },
-      onRemoved: {
-        addListener() {}
-      }
-    }
+    tabs: {}
   }
 };
 
 vm.createContext(backgroundSandbox);
 vm.runInContext(groupingContent, backgroundSandbox, { filename: 'grouping.js' });
-assert.strictEqual('__tabgodPopupGroupingPerformance' in backgroundSandbox, false);
-const throwingPerformanceGroupingSandbox = {
-  document: {},
-  performance: {
-    now() {
-      throw new Error('计时器不可用');
-    }
-  }
-};
-vm.createContext(throwingPerformanceGroupingSandbox);
-vm.runInContext(groupingContent, throwingPerformanceGroupingSandbox, { filename: 'grouping.js' });
-assert.strictEqual(typeof throwingPerformanceGroupingSandbox.TabGodGrouping.normalizeSettings, 'function');
-assert.strictEqual(throwingPerformanceGroupingSandbox.__tabgodPopupGroupingPerformance.start, null);
+const ruleMatchContextCacheParseCount = vm.runInContext(`(() => {
+  let parseCount = 0;
+  const NativeUrl = URL;
+  URL = class CountingUrl extends NativeUrl { constructor(...args) { super(...args); parseCount += 1; } };
+  const tabs = Array.from({ length: 60 }, (_, index) => ({
+    url: 'https://site-' + index + '.example.com/page',
+    pinned: false
+  }));
+  const conditionTree = {
+    type: 'group',
+    logic: 'and',
+    children: [{ type: 'condition', field: 'hostname', operator: 'contains', value: 'never-match.invalid' }]
+  };
+  const settings = TabGodGrouping.normalizeSettings({
+    groupRules: [{
+      id: 'cache-miss',
+      name: '缓存未命中规则',
+      enabled: true,
+      targetGroupKey: 'custom:缓存',
+      targetTitle: '缓存',
+      minTabsPerGroup: 1,
+      conditionTree
+    }]
+  });
+  tabs.forEach((tab) => TabGodGrouping.getResolvedGroupInfoFromNormalizedSettings(tab, settings));
+  tabs.forEach((tab) => TabGodGrouping.doesRuleMatchTab(settings.groupRules[0], tab));
+  URL = NativeUrl;
+  return parseCount;
+})()`, backgroundSandbox);
+assert.strictEqual(ruleMatchContextCacheParseCount, 60);
 const backgroundGroupingApi = backgroundSandbox.TabGodGrouping;
 let backgroundNormalizeSettingsCallCount = 0;
 let backgroundResolvedGroupInfoCallCount = 0;
@@ -325,6 +335,49 @@ backgroundSandbox.TabGodGrouping = Object.freeze(Object.assign({}, backgroundGro
 // 校验脚本继续通过沙箱属性访问纯函数，避免测试依赖后台脚本内部的词法声明方式。
 Object.assign(backgroundSandbox, backgroundGroupingApi);
 vm.runInContext(backgroundContent, backgroundSandbox, { filename: 'background.js' });
+
+// 原始配置包装只服务校验用例，生产批量路径直接接收已归一化配置。
+Object.assign(backgroundSandbox, {
+  getResolvedGroupInfo(tab, settings) {
+    return backgroundSandbox.TabGodGrouping.getResolvedGroupInfoFromNormalizedSettings(
+      tab,
+      backgroundSandbox.TabGodGrouping.normalizeSettings(settings)
+    );
+  },
+  buildTabSnapshots(tabs, settings) {
+    return backgroundSandbox.TabGodGrouping.buildTabSnapshotsFromNormalizedSettings(
+      tabs,
+      backgroundSandbox.TabGodGrouping.normalizeSettings(settings)
+    );
+  },
+  buildOrganizedTabs(tabs, settings) {
+    return backgroundSandbox.buildOrganizedTabsFromNormalizedSettings(
+      tabs,
+      backgroundSandbox.TabGodGrouping.normalizeSettings(settings)
+    );
+  },
+  buildRecentlyClosedTabSnapshots(sessions, settings) {
+    return backgroundSandbox.buildRecentlyClosedTabSnapshotsFromNormalizedSettings(
+      sessions,
+      backgroundSandbox.TabGodGrouping.normalizeSettings(settings)
+    );
+  },
+  buildGroupSummaries(tabs, settings) {
+    return backgroundSandbox.buildGroupSummariesFromNormalizedSettings(
+      tabs,
+      backgroundSandbox.TabGodGrouping.normalizeSettings(settings)
+    );
+  },
+  reconcileCurrentWindowGroups(settings) {
+    return backgroundSandbox.reconcileCurrentWindowGroupsFromNormalizedSettings(
+      backgroundSandbox.TabGodGrouping.normalizeSettings(settings)
+    );
+  },
+  shouldCreateNativeGroup(tabIds, settings) {
+    return Array.isArray(tabIds)
+      && tabIds.length >= backgroundSandbox.TabGodGrouping.normalizeSettings(settings).minTabsPerGroup;
+  }
+});
 
 function makeConditionTree(children, logic = 'and') {
   return {
@@ -423,6 +476,8 @@ assert.strictEqual(normalizedRuleSettings.groupRules[0].targetTitle, '项目 A')
 assert.strictEqual(normalizedRuleSettings.groupRules[0].minTabsPerGroup, 1);
 assert.strictEqual(normalizedRuleSettings.groupRules[0].conditionTree.children[0].value, 'github.com');
 assert.strictEqual(normalizedRuleSettings.groupRules[0].conditions, undefined);
+assert.strictEqual(normalizedRuleSettings.groupRules[0].createdAt, undefined);
+assert.strictEqual(normalizedRuleSettings.groupRules[0].updatedAt, undefined);
 
 const normalizedTreeRuleSettings = backgroundSandbox.normalizeSettings({
   minTabsPerGroup: 2,
@@ -773,6 +828,18 @@ const batchNormalizationTabs = Array.from({ length: 60 }, (_, index) => ({
   index
 }));
 
+let groupingUrlParseCount = 0;
+const OriginalGroupingUrl = backgroundSandbox.URL;
+backgroundSandbox.URL = class CountingUrl extends OriginalGroupingUrl {
+  constructor(...args) {
+    super(...args);
+    groupingUrlParseCount += 1;
+  }
+};
+backgroundSandbox.buildTabSnapshots(batchNormalizationTabs, batchNormalizationSettings);
+backgroundSandbox.URL = OriginalGroupingUrl;
+assert.strictEqual(groupingUrlParseCount, batchNormalizationTabs.length);
+
 backgroundNormalizeSettingsCallCount = 0;
 backgroundResolvedGroupInfoCallCount = 0;
 backgroundSandbox.buildOrganizedTabs(batchNormalizationTabs, batchNormalizationSettings);
@@ -783,17 +850,7 @@ backgroundNormalizeSettingsCallCount = 0;
 backgroundSandbox.buildGroupSummaries(batchNormalizationTabs, batchNormalizationSettings);
 assert.strictEqual(backgroundNormalizeSettingsCallCount, 1);
 
-assert.strictEqual(typeof backgroundSandbox.normalizeRecentAccessMap, 'function');
 assert.strictEqual(typeof backgroundSandbox.activateTabAcrossWindows, 'function');
-
-const normalizedRecentAccessMap = backgroundSandbox.normalizeRecentAccessMap({
-  101: 10,
-  102: 30,
-  abc: 40
-});
-assert.strictEqual(normalizedRecentAccessMap['102'], 30);
-assert.strictEqual(normalizedRecentAccessMap['101'], 10);
-assert.strictEqual(normalizedRecentAccessMap.abc, undefined);
 
 const visibleGroupSummaries = backgroundSandbox.buildGroupSummaries([
   { id: 201, url: 'https://mail.google.com/inbox', pinned: false, index: 0 },
@@ -970,10 +1027,6 @@ const customTabSnapshots = backgroundSandbox.buildTabSnapshots([
 assert.strictEqual(customTabSnapshots[0].groupKey, 'custom:项目 A');
 assert.strictEqual(customTabSnapshots[0].groupTitle, '项目 A');
 
-const customGroupSnapshots = backgroundSandbox.buildGroupSnapshots(customTabSnapshots);
-assert.strictEqual(customGroupSnapshots[0].groupKey, 'custom:项目 A');
-assert.strictEqual(customGroupSnapshots[0].title, '项目 A');
-
 const sameTargetDifferentTitleSettings = backgroundSandbox.normalizeSettings({
   minTabsPerGroup: 2,
   priorityGroups: [],
@@ -1110,10 +1163,6 @@ const domainKeyCustomTitleSummaries = backgroundSandbox.buildGroupSummaries(mixe
 assert.strictEqual(domainKeyCustomTitleSummaries.length, 1);
 assert.strictEqual(domainKeyCustomTitleSummaries[0].groupKey, 'github.com');
 assert.strictEqual(domainKeyCustomTitleSummaries[0].title, '代码仓库');
-
-const domainKeyCustomTitleGroupSnapshots = backgroundSandbox.buildGroupSnapshots(domainKeyCustomTitleSnapshots);
-assert.strictEqual(domainKeyCustomTitleGroupSnapshots[0].groupKey, 'github.com');
-assert.strictEqual(domainKeyCustomTitleGroupSnapshots[0].title, '代码仓库');
 
 const laterMatchedDomainKeyThresholdSettings = backgroundSandbox.normalizeSettings({
   minTabsPerGroup: 3,
@@ -1278,7 +1327,6 @@ assert.strictEqual(duplicateGroups[0].reason, '忽略追踪参数后重复');
 assert.strictEqual(duplicateGroups[0].keepTabId, 3);
 // vm 沙箱返回的数组原型不同，转成本上下文数组后再比较内容，避免误判业务结果。
 assert.deepStrictEqual(Array.from(duplicateGroups[0].closeTabIds), [1]);
-assert.strictEqual(backgroundSandbox.buildOverview(duplicateTabs).duplicateCount, null);
 
 const protectedDuplicateGroups = backgroundSandbox.buildDuplicateGroups([
   { id: 21, title: '保留页面', url: 'https://example.com/protected', active: false, pinned: false, audible: false, index: 0 },
@@ -1312,7 +1360,25 @@ const oldWorkspace = backgroundSandbox.normalizeWorkspace({
 });
 assert.strictEqual(oldWorkspace.favorite, false);
 assert.strictEqual(oldWorkspace.favoritedAt, 0);
-assert.strictEqual(oldWorkspace.updatedAt, 1);
+assert.strictEqual(oldWorkspace.updatedAt, undefined);
+assert.strictEqual(oldWorkspace.groupCount, 0);
+
+const migratedWorkspace = backgroundSandbox.normalizeWorkspace({
+  id: 'session-legacy',
+  createdAt: 2,
+  tabs: [
+    { id: 1, title: '旧标题', url: 'https://a.example.com', pinned: true, groupKey: 'example.com' },
+    { id: 2, url: 'https://github.com/openai', pinned: false, groupKey: 'github.com' }
+  ]
+});
+assert.strictEqual(migratedWorkspace.groupCount, 2);
+assert.deepStrictEqual({ ...migratedWorkspace.tabs[0] }, {
+  id: 1,
+  title: '旧标题',
+  url: 'https://a.example.com',
+  pinned: true
+});
+assert.strictEqual(migratedWorkspace.groups, undefined);
 
 const popupPath = path.join(rootDir, 'popup.js');
 const popupUnifiedSearchSettings = {
@@ -1336,19 +1402,12 @@ const popupChromeCalls = {
   tabQueries: [],
   storageGets: [],
   storageSets: [],
-  storageRemoves: [],
   commandReads: 0,
   createdTabs: [],
   sessionChangedListeners: []
 };
 const popupElements = new Map();
-const popupPerformanceStoredState = {};
-const popupPerformanceSessionState = {};
-const popupClipboardWrites = [];
-let popupClipboardFailure = false;
-let popupConfirmResult = false;
-let popupRemoveFailure = false;
-let popupDeferredRemove = null;
+const popupStoredState = {};
 
 function createPopupTestElement() {
   return {
@@ -1387,6 +1446,7 @@ let popupCommandList = [
   { name: 'organize-tabs', shortcut: 'Alt+Shift+Y' },
   { name: 'save-session', shortcut: '' }
 ];
+let popupCloseCount = 0;
 const popupSandbox = {
   console,
   URL,
@@ -1461,7 +1521,10 @@ const popupSandbox = {
           { id: 203, title: '代码仓库', url: 'https://github.com/example/project-a', active: false, pinned: false, audible: true, index: 0, windowId: 20, groupId: -1 }
         ];
 
-        return queryInfo && queryInfo.currentWindow ? allTabs.filter((tab) => tab.windowId === 10) : allTabs;
+        return allTabs.filter((tab) => {
+          return (!queryInfo || !queryInfo.currentWindow || tab.windowId === 10)
+            && (!queryInfo || !queryInfo.active || tab.active);
+        });
       }
     },
     storage: {
@@ -1470,9 +1533,8 @@ const popupSandbox = {
           popupChromeCalls.storageGets.push(keys);
           const stored = Object.assign({
             'tabgod.settings': popupUnifiedSearchSettings,
-            'tabgod.recentAccess': { 202: 400, 203: 300 },
             'tabgod.colorScheme': 'violet'
-          }, popupPerformanceStoredState);
+          }, popupStoredState);
           return keys.reduce((result, key) => {
             if (Object.prototype.hasOwnProperty.call(stored, key)) {
               result[key] = stored[key];
@@ -1482,56 +1544,20 @@ const popupSandbox = {
         },
         async set(values) {
           popupChromeCalls.storageSets.push(values);
-          Object.assign(popupPerformanceStoredState, values);
-        },
-        async remove(key) {
-          if (popupDeferredRemove) {
-            await popupDeferredRemove;
-          }
-          if (popupRemoveFailure) {
-            throw new Error('模拟清除失败');
-          }
-          popupChromeCalls.storageRemoves.push(key);
-          delete popupPerformanceStoredState[key];
+          Object.assign(popupStoredState, values);
         }
-      },
-      session: {
-        async get(keys) {
-          return keys.reduce((result, key) => {
-            if (Object.prototype.hasOwnProperty.call(popupPerformanceSessionState, key)) {
-              result[key] = popupPerformanceSessionState[key];
-            }
-            return result;
-          }, {});
-        },
-        async set(values) {
-          Object.assign(popupPerformanceSessionState, values);
-        }
-      }
-    }
-  },
-  crypto: {
-    randomUUID() {
-      return 'popup-performance-session';
-    }
-  },
-  navigator: {
-    userAgent: 'Mozilla/5.0 Chrome/138.0.0.0 Safari/537.36',
-    clipboard: {
-      async writeText(text) {
-        if (popupClipboardFailure) {
-          throw new Error('模拟剪贴板失败');
-        }
-        popupClipboardWrites.push(text);
       }
     }
   },
   window: {
+    close() {
+      popupCloseCount += 1;
+    },
     prompt() {
       return null;
     },
     confirm() {
-      return popupConfirmResult;
+      return false;
     }
   },
   Intl,
@@ -1547,6 +1573,78 @@ const popupSandbox = {
 vm.createContext(popupSandbox);
 vm.runInContext(groupingContent, popupSandbox, { filename: 'grouping.js' });
 vm.runInContext(fs.readFileSync(popupPath, 'utf8'), popupSandbox, { filename: 'popup.js' });
+
+async function assertPopupProgressiveInitialLoadContract() {
+  popupChromeCalls.tabQueries.length = 0;
+  popupChromeCalls.storageGets.length = 0;
+
+  const queryTabs = popupSandbox.chrome.tabs.query.bind(popupSandbox.chrome.tabs);
+  const scheduledTasks = [];
+  const originalSetTimeout = popupSandbox.window.setTimeout;
+  let allTabsQueryStarted = false;
+  let releaseAllTabs;
+  const allTabsReady = new Promise((resolve) => {
+    releaseAllTabs = resolve;
+  });
+
+  popupSandbox.window.setTimeout = (callback) => {
+    scheduledTasks.push(callback);
+    return scheduledTasks.length;
+  };
+  popupSandbox.chrome.tabs.query = async (queryInfo) => {
+    if (Object.keys(queryInfo || {}).length === 0) {
+      allTabsQueryStarted = true;
+      await allTabsReady;
+    }
+
+    return queryTabs(queryInfo);
+  };
+  vm.runInContext(`
+    state.tabs = [];
+    state.overview = { allTabCount: 0, windowCount: 0, duplicateCount: 0 };
+  `, popupSandbox);
+
+  try {
+    let initialLoadSettled = false;
+    const initialLoad = popupSandbox.loadState({ progressive: true, skipDuplicateOverview: true })
+      .then(() => {
+        initialLoadSettled = true;
+      });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.strictEqual(initialLoadSettled, true, '首屏不应等待全部窗口标签查询');
+    await initialLoad;
+    assert.strictEqual(vm.runInContext('state.tabs.length', popupSandbox), 2);
+    assert.strictEqual(vm.runInContext('state.busy', popupSandbox), false);
+    assert.strictEqual(popupChromeCalls.tabQueries.length, 1);
+    assert.deepStrictEqual({ ...popupChromeCalls.tabQueries[0] }, { currentWindow: true });
+    assert.strictEqual(scheduledTasks.length, 1);
+
+    const fullLoad = scheduledTasks.shift()();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(vm.runInContext('state.tabs.length', popupSandbox), 2);
+    assert.strictEqual(allTabsQueryStarted, true);
+    assert.strictEqual(popupChromeCalls.tabQueries.length, 1);
+
+    releaseAllTabs();
+    await fullLoad;
+    assert.strictEqual(popupChromeCalls.tabQueries.length, 2);
+    assert.deepStrictEqual({ ...popupChromeCalls.tabQueries[1] }, {});
+    assert.strictEqual(vm.runInContext('state.tabs.length', popupSandbox), 3);
+    assert.strictEqual(vm.runInContext('state.overview.allTabCount', popupSandbox), 3);
+
+    const staleVersion = vm.runInContext('state.loadVersion', popupSandbox);
+    popupSandbox.loadAllTabsAfterInitialRender(staleVersion);
+    const staleLoad = scheduledTasks.shift()();
+    vm.runInContext('state.loadVersion += 1; state.tabs = [{ id: 999 }];', popupSandbox);
+    await staleLoad;
+    assert.strictEqual(vm.runInContext('state.tabs[0].id', popupSandbox), 999);
+  } finally {
+    releaseAllTabs();
+    popupSandbox.chrome.tabs.query = queryTabs;
+    popupSandbox.window.setTimeout = originalSetTimeout;
+  }
+}
 
 async function assertPopupUnifiedSearchStateContract() {
   popupChromeCalls.messages.length = 0;
@@ -1578,6 +1676,11 @@ async function assertPopupUnifiedSearchStateContract() {
   assert.strictEqual(popupChromeCalls.messages.length, 0);
   assert.strictEqual(popupChromeCalls.tabQueries.length, 2);
   assert.strictEqual(popupChromeCalls.storageGets.length, 1);
+  assert.deepStrictEqual({ ...popupChromeCalls.tabQueries[0] }, { currentWindow: true, active: true });
+  assert.deepStrictEqual(Array.from(popupChromeCalls.storageGets[0]), [
+    'tabgod.settings',
+    'tabgod.colorScheme'
+  ]);
   assert.strictEqual(localState.tabs.length, 3);
   assert.strictEqual(localState.tabs[0].groupKey, 'google.com');
   assert.strictEqual(localState.tabs[0].groupTitle, 'google');
@@ -1588,14 +1691,14 @@ async function assertPopupUnifiedSearchStateContract() {
   assert.strictEqual(localState.recentlyClosedTabs.length, 0);
   assert.strictEqual(localState.sessions.length, 0);
   assert.strictEqual(localState.colorScheme, 'violet');
-  assert.strictEqual(localState.tabs[1].lastAccessedAt, 400);
+  assert.strictEqual(localState.tabs[1].lastAccessedAt, 0);
   assert.strictEqual(localState.tabs[2].audible, true);
   assert.strictEqual(popupSandbox.normalizeColorScheme('unknown'), 'teal');
   assert.strictEqual(popupSandbox.applyColorScheme('navy'), 'navy');
   assert.strictEqual(popupSandbox.document.documentElement.dataset.colorScheme, 'navy');
   await popupSandbox.updateColorScheme('indigo');
   assert.strictEqual(popupSandbox.document.documentElement.dataset.colorScheme, 'indigo');
-  assert.strictEqual(popupPerformanceStoredState['tabgod.colorScheme'], 'indigo');
+  assert.strictEqual(popupStoredState['tabgod.colorScheme'], 'indigo');
   assert.strictEqual(popupElements.get('colorSchemeStatus').textContent, '已切换为星夜靛');
 
   const projectResults = popupSandbox.getVisibleTabsFromState(Object.assign({}, localState, {
@@ -1614,6 +1717,32 @@ async function assertPopupUnifiedSearchStateContract() {
     popupElements.get('openShortcutHint').attributes['aria-label'],
     '打开弹窗快捷键：Alt+Shift+L'
   );
+
+  let matchingShortcutPrevented = false;
+  popupSandbox.handlePopupShortcutKeydown({
+    key: 'L',
+    altKey: true,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: true,
+    preventDefault() {
+      matchingShortcutPrevented = true;
+    }
+  });
+  assert.strictEqual(matchingShortcutPrevented, true);
+  assert.strictEqual(popupCloseCount, 1);
+
+  popupSandbox.handlePopupShortcutKeydown({
+    key: 'L',
+    altKey: false,
+    ctrlKey: true,
+    metaKey: false,
+    shiftKey: true,
+    preventDefault() {
+      throw new Error('错误组合键不应阻止默认行为');
+    }
+  });
+  assert.strictEqual(popupCloseCount, 1);
 
   popupCommandList = [
     { name: '_execute_action', shortcut: '' },
@@ -1850,14 +1979,13 @@ try {
 }
 
 vm.runInContext(`
-  globalThis.searchScoreCallCounts = new Map();
+  globalThis.searchNormalizeCallCount = 0;
   globalThis.searchFieldCallCounts = new Map();
-  globalThis.originalSearchMatchScore = getSearchMatchScore;
+  globalThis.originalNormalizeSearchText = normalizeSearchText;
   globalThis.originalSearchFieldParts = getSearchFieldParts;
-  getSearchMatchScore = function (tab, query) {
-    const key = String(tab.id);
-    searchScoreCallCounts.set(key, (searchScoreCallCounts.get(key) || 0) + 1);
-    return originalSearchMatchScore(tab, query);
+  normalizeSearchText = function (value) {
+    searchNormalizeCallCount += 1;
+    return originalNormalizeSearchText(value);
   };
   getSearchFieldParts = function (tab) {
     const key = String(tab.id);
@@ -1880,14 +2008,12 @@ popupSandbox.getVisibleTabsFromState({
     resultType: 'recentlyClosed'
   }]
 });
-assert.strictEqual(popupSandbox.searchScoreCallCounts.size, 4);
-assert.ok(Array.from(popupSandbox.searchScoreCallCounts.values()).every((count) => count === 1));
+assert.strictEqual(popupSandbox.searchNormalizeCallCount, 9);
 assert.strictEqual(popupSandbox.searchFieldCallCounts.size, 4);
 assert.ok(Array.from(popupSandbox.searchFieldCallCounts.values()).every((count) => count === 1));
-assert.strictEqual(popupSandbox.searchScoreCallCounts.get('11'), 1);
 assert.strictEqual(popupSandbox.searchFieldCallCounts.get('11'), 1);
 vm.runInContext(`
-  getSearchMatchScore = originalSearchMatchScore;
+  normalizeSearchText = originalNormalizeSearchText;
   getSearchFieldParts = originalSearchFieldParts;
 `, popupSandbox);
 
@@ -2171,13 +2297,9 @@ assert.ok(popupJsContent.includes('const DUPLICATE_REVIEW_SCROLL_OPTIONS = { blo
 assert.ok(popupJsContent.includes('section.scrollIntoView(DUPLICATE_REVIEW_SCROLL_OPTIONS);'));
 assert.ok(popupJsContent.includes('move-priority-group'));
 assert.ok(popupJsContent.includes('group-order-button'));
-const performanceDiagnosticsSource = popupJsContent.slice(
-  popupJsContent.indexOf('function togglePerformanceDiagnostics()'),
-  popupJsContent.indexOf('function toggleSortHelp()')
-);
-assert.ok(!performanceDiagnosticsSource.includes("sendMessage("));
-assert.ok(!performanceDiagnosticsSource.includes('loadManagementState('));
-assert.ok(!performanceDiagnosticsSource.includes('loadState('));
+assert.ok(!popupJsContent.includes('popupPerformance'));
+assert.ok(!popupJsContent.includes('performanceDiagnostics'));
+assert.ok(!groupingContent.includes('__tabgodPopupGroupingPerformance'));
 
 const popupHtml = fs.readFileSync(path.join(rootDir, 'popup.html'), 'utf8');
 const popupCssContent = fs.readFileSync(path.join(rootDir, 'popup.css'), 'utf8');
@@ -2258,648 +2380,10 @@ assert.ok(usageSvgContent.includes('最近使用与键盘选择'));
 assert.ok(usageSvgContent.includes('分组规则是核心能力'));
 assert.ok(usageSvgContent.includes('满足全部或满足任一'));
 
-async function assertPopupPerformanceContract() {
-  assert.strictEqual(vm.runInContext('popupPerformance.status', popupSandbox), 'unavailable');
-  assert.strictEqual('__tabgodPopupGroupingPerformance' in popupSandbox, false);
-
-  let performanceNow = 100;
-  popupSandbox.performance = {
-    now() {
-      performanceNow += 1;
-      return performanceNow;
-    }
-  };
-  vm.runInContext(`
-    popupPerformance.enabled = true;
-    popupPerformance.status = 'collecting';
-    popupPerformance.freezeStarted = false;
-    popupPerformance.stages = {};
-  `, popupSandbox);
-  await popupSandbox.loadPopupStateFromBrowser();
-  await popupSandbox.loadCommandShortcuts();
-  const startupStages = vm.runInContext('popupPerformance.stages', popupSandbox);
-  assert.strictEqual(startupStages.currentTabs.outcome, 'success');
-  assert.strictEqual(startupStages.currentTabs.count, 2);
-  assert.strictEqual(startupStages.allTabs.count, 3);
-  assert.strictEqual(startupStages.storage.count, 3);
-  assert.strictEqual(startupStages.browserStateRead.outcome, 'success');
-  assert.strictEqual(startupStages.stateBuild.outcome, 'success');
-  assert.strictEqual(startupStages.commands.count, 2);
-  const firstCurrentTabsStart = startupStages.currentTabs.start;
-  await popupSandbox.loadPopupStateFromBrowser();
-  assert.strictEqual(
-    vm.runInContext('popupPerformance.stages.currentTabs.start', popupSandbox),
-    firstCurrentTabsStart
-  );
-  await assert.rejects(
-    () => popupSandbox.measurePopupPerformanceCall(
-      'rejectedCall',
-      () => Promise.reject(new Error('保持拒绝语义'))
-    ),
-    /保持拒绝语义/
-  );
-  assert.strictEqual(
-    vm.runInContext('popupPerformance.stages.rejectedCall.outcome', popupSandbox),
-    'error'
-  );
-
-  delete popupPerformanceStoredState['tabgod.popupPerformanceHistory'];
-  delete popupPerformanceSessionState['tabgod.popupPerformanceSession'];
-
-  for (let index = 0; index < 21; index += 1) {
-    const recordedAt = new Date(Date.UTC(2026, 6, 28, 0, 0, index)).toISOString();
-    const result = await popupSandbox.persistPopupPerformanceSnapshot({ recordedAt });
-    assert.strictEqual(result.saved, true);
-  }
-
-  const history = popupPerformanceStoredState['tabgod.popupPerformanceHistory'];
-  assert.strictEqual(history.schemaVersion, 1);
-  assert.strictEqual(history.samples.length, 20);
-  assert.strictEqual(history.samples[0].recordedAt, '2026-07-28T00:00:01.000Z');
-  assert.strictEqual(history.samples[0].session.recordedPopupIndex, 2);
-  assert.strictEqual(history.samples[19].session.recordedPopupIndex, 21);
-  assert.strictEqual(history.samples[19].session.firstRecordedPopup, false);
-  assert.strictEqual(history.samples[19].session.id, 'popup-performance-session');
-
-  const messageCount = popupChromeCalls.messages.length;
-  const tabQueryCount = popupChromeCalls.tabQueries.length;
-  popupSandbox.togglePerformanceDiagnostics();
-  assert.strictEqual(vm.runInContext('state.performanceDiagnosticsVisible', popupSandbox), true);
-  assert.strictEqual(popupChromeCalls.messages.length, messageCount);
-  assert.strictEqual(popupChromeCalls.tabQueries.length, tabQueryCount);
-
-  vm.runInContext("popupPerformance.status = 'saved'; popupPerformance.message = '';", popupSandbox);
-  await popupSandbox.copyPerformanceDiagnostics();
-  const exported = JSON.parse(popupClipboardWrites.at(-1));
-  assert.strictEqual(exported.format, 'tabgod-popup-performance');
-  assert.strictEqual(exported.schemaVersion, 1);
-  assert.strictEqual(exported.sampleCount, 20);
-
-  popupClipboardFailure = true;
-  await popupSandbox.copyPerformanceDiagnostics();
-  popupClipboardFailure = false;
-  assert.ok(vm.runInContext('state.performanceDiagnosticsText.length', popupSandbox) > 0);
-  assert.strictEqual(
-    popupElements.get('performanceDiagnosticsStatus').textContent,
-    '自动复制失败，请从下方文本框手动复制'
-  );
-
-  const storageGetCount = popupChromeCalls.storageGets.length;
-  vm.runInContext("popupPerformance.status = 'collecting';", popupSandbox);
-  await popupSandbox.copyPerformanceDiagnostics();
-  assert.strictEqual(popupChromeCalls.storageGets.length, storageGetCount);
-  assert.strictEqual(
-    popupElements.get('performanceDiagnosticsStatus').textContent,
-    '本次记录仍在采集，请稍后重试'
-  );
-
-  popupConfirmResult = true;
-  popupRemoveFailure = true;
-  vm.runInContext(`
-    popupPerformance.status = 'persisting';
-    popupPerformance.persistPromise = Promise.resolve().then(() => {
-      const suppressed = popupPerformance.suppressCurrentHistory;
-      popupPerformance.status = suppressed ? 'unavailable' : 'saved';
-      return { saved: !suppressed, suppressed };
-    });
-  `, popupSandbox);
-  await popupSandbox.clearPerformanceDiagnostics();
-  assert.strictEqual(vm.runInContext('popupPerformance.status', popupSandbox), 'saved');
-  assert.strictEqual(vm.runInContext('popupPerformance.suppressCurrentHistory', popupSandbox), false);
-  assert.strictEqual('tabgod.popupPerformanceHistory' in popupPerformanceStoredState, true);
-
-  popupRemoveFailure = false;
-  let rejectDeferredRemove;
-  popupDeferredRemove = new Promise((resolve, reject) => {
-    rejectDeferredRemove = reject;
-  });
-  vm.runInContext(`
-    popupPerformance.status = 'collecting';
-    popupPerformance.persistPromise = null;
-  `, popupSandbox);
-  const collectingClear = popupSandbox.clearPerformanceDiagnostics();
-  vm.runInContext(`
-    popupPerformance.status = 'persisting';
-    popupPerformance.persistPromise = persistPopupPerformanceSnapshot({
-      recordedAt: '2026-07-28T00:01:00.000Z'
-    }).then((result) => {
-      popupPerformance.status = result.saved ? 'saved' : 'unavailable';
-      return result;
-    });
-  `, popupSandbox);
-  rejectDeferredRemove(new Error('模拟采集中清除失败'));
-  await collectingClear;
-  popupDeferredRemove = null;
-  assert.strictEqual(vm.runInContext('popupPerformance.status', popupSandbox), 'saved');
-  assert.strictEqual(vm.runInContext('popupPerformance.suppressCurrentHistory', popupSandbox), false);
-  assert.strictEqual(vm.runInContext('popupPerformance.clearPromise', popupSandbox), null);
-  assert.strictEqual(
-    popupPerformanceStoredState['tabgod.popupPerformanceHistory'].samples.at(-1).recordedAt,
-    '2026-07-28T00:01:00.000Z'
-  );
-
-  let resolveDeferredRemove;
-  popupDeferredRemove = new Promise((resolve) => {
-    resolveDeferredRemove = resolve;
-  });
-  vm.runInContext(`
-    popupPerformance.status = 'collecting';
-    popupPerformance.suppressCurrentHistory = false;
-    popupPerformance.persistPromise = null;
-  `, popupSandbox);
-  const successfulCollectingClear = popupSandbox.clearPerformanceDiagnostics();
-  vm.runInContext(`
-    popupPerformance.status = 'persisting';
-    popupPerformance.persistPromise = persistPopupPerformanceSnapshot({
-      recordedAt: '2026-07-28T00:02:00.000Z'
-    }).then((result) => {
-      if (popupPerformance.status !== 'cleared') {
-        popupPerformance.status = result.saved ? 'saved' : 'unavailable';
-      }
-      return result;
-    });
-  `, popupSandbox);
-  const successfulCollectingPersist = vm.runInContext('popupPerformance.persistPromise', popupSandbox);
-  resolveDeferredRemove();
-  await successfulCollectingClear;
-  const successfulCollectingResult = await successfulCollectingPersist;
-  popupDeferredRemove = null;
-  assert.strictEqual('tabgod.popupPerformanceHistory' in popupPerformanceStoredState, false);
-  assert.strictEqual(vm.runInContext('popupPerformance.status', popupSandbox), 'cleared');
-  assert.strictEqual(successfulCollectingResult.suppressed, true);
-  assert.strictEqual(popupPerformanceSessionState['tabgod.popupPerformanceSession'].recordedPopupIndex, 23);
-  const suppressed = await popupSandbox.persistPopupPerformanceSnapshot({
-    recordedAt: '2026-07-28T00:03:00.000Z'
-  });
-  assert.strictEqual(suppressed.suppressed, true);
-  assert.strictEqual('tabgod.popupPerformanceHistory' in popupPerformanceStoredState, false);
-  popupConfirmResult = false;
-
-  vm.runInContext(`
-    capturedPopupPerformanceSnapshot = null;
-    popupPaintObserverDisconnected = false;
-    popupLongTaskObserverDisconnected = false;
-    popupPerformance.enabled = true;
-    popupPerformance.status = 'collecting';
-    popupPerformance.freezeStarted = false;
-    popupPerformance.measurementPartial = false;
-    popupPerformance.paintSupported = true;
-    popupPerformance.longTaskSupported = true;
-    popupPerformance.navigation = {
-      responseEnd: 20,
-      domContentLoadedStart: 80,
-      domContentLoadedEnd: 90,
-      domComplete: 100,
-      loadEnd: 110
-    };
-    popupPerformance.resources = {
-      'popup.css': { start: 5.04, responseEnd: 18.06, duration: 13.02 },
-      'grouping.js': { start: 6.04, responseEnd: 28.06, duration: 22.02 },
-      'popup.js': { start: 7.04, responseEnd: 48.06, duration: 41.02 }
-    };
-    popupPerformance.points = {
-      groupingScriptStart: 30,
-      groupingScriptEnd: 40,
-      scriptStart: 50,
-      popupScriptEnd: 70,
-      domContentLoadedHandlerStart: 80,
-      windowLoad: 105,
-      loadStateStart: 120,
-      stateReady: 220,
-      controlsReady: 235,
-      usableReadyToPaint: 240,
-      usablePaintOpportunity: 250,
-      firstContentfulPaint: 300
-    };
-    popupPerformance.stages = {
-      render: { start: 220, end: 230, duration: 10, outcome: 'success', count: null }
-    };
-    popupPerformance.longTasks = [{ start: 40, duration: 80 }];
-    popupPerformance.paintObserver = {
-      takeRecords() { return [{ name: 'first-paint', startTime: 190 }]; },
-      disconnect() { popupPaintObserverDisconnected = true; }
-    };
-    popupPerformance.longTaskObserver = {
-      takeRecords() { return [{ startTime: 260, duration: 60 }]; },
-      disconnect() { popupLongTaskObserverDisconnected = true; }
-    };
-    persistPopupPerformanceSnapshot = async (snapshot) => {
-      capturedPopupPerformanceSnapshot = snapshot;
-      return { saved: true, suppressed: false };
-    };
-    freezePopupPerformanceSample();
-  `, popupSandbox);
-  await vm.runInContext('popupPerformance.persistPromise', popupSandbox);
-  const snapshot = vm.runInContext('capturedPopupPerformanceSnapshot', popupSandbox);
-  assert.strictEqual(snapshot.derived.navigationToUsable, 300);
-  assert.strictEqual(snapshot.derived.postRenderFcpDelay, 70);
-  assert.strictEqual(snapshot.points.popupScriptEnd, 70);
-  assert.strictEqual(snapshot.resourceEntryCount, null);
-  assert.strictEqual(snapshot.resources['popup.js'].start, 7);
-  assert.strictEqual(snapshot.resources['popup.js'].responseEnd, 48.1);
-  assert.strictEqual(snapshot.resources['popup.js'].duration, 41);
-  assert.strictEqual(snapshot.longTasks.count, 1);
-  assert.strictEqual(snapshot.longTasks.entries[0].start, 260);
-  assert.strictEqual(snapshot.outcome.measurement, 'complete');
-  assert.strictEqual(vm.runInContext('popupPaintObserverDisconnected', popupSandbox), true);
-  assert.strictEqual(vm.runInContext('popupLongTaskObserverDisconnected', popupSandbox), true);
-  vm.runInContext('ingestPopupLongTaskEntries([{ startTime: 280, duration: 70 }]);', popupSandbox);
-  assert.strictEqual(vm.runInContext('popupPerformance.longTasks.length', popupSandbox), 2);
-
-  const earlyFcpSnapshot = vm.runInContext(`
-    popupPerformance.points.firstContentfulPaint = 200;
-    buildPopupPerformanceSnapshot(250);
-  `, popupSandbox);
-  assert.strictEqual(earlyFcpSnapshot.derived.postRenderFcpDelay, null);
-
-  const preciseSnapshot = vm.runInContext(`
-    popupPerformance.navigation.responseEnd = 20.04;
-    popupPerformance.points.groupingScriptStart = 30.06;
-    popupPerformance.points.scriptStart = 50.04;
-    popupPerformance.longTasks = [
-      { start: 50.02, duration: 60 },
-      { start: 50.05, duration: 70 }
-    ];
-    buildPopupPerformanceSnapshot(250);
-  `, popupSandbox);
-  assert.strictEqual(preciseSnapshot.navigation.responseEnd, 20);
-  assert.strictEqual(preciseSnapshot.points.groupingScriptStart, 30.1);
-  assert.strictEqual(preciseSnapshot.derived.responseToGrouping, 10);
-  assert.strictEqual(preciseSnapshot.longTasks.count, 1);
-}
-
-function createPopupPerformanceLifecycleHarness(options = {}) {
-  const elements = new Map();
-  const documentListeners = {};
-  const windowListeners = {};
-  const timers = [];
-  const animationFrames = [];
-  const performanceStorageOperations = [];
-  const storedState = options.damagedHistory ? {
-    'tabgod.popupPerformanceHistory': {
-      schemaVersion: 999,
-      samples: [{ marker: 'damaged' }]
-    }
-  } : {};
-  const sessionState = {};
-  let now = 0;
-
-  const lifecycleSandbox = {
-    console,
-    URL,
-    document: {
-      documentElement: {
-        dataset: {}
-      },
-      visibilityState: 'visible',
-      addEventListener(type, listener) {
-        documentListeners[type] = listener;
-      },
-      getElementById(id) {
-        if (!elements.has(id)) {
-          elements.set(id, createPopupTestElement());
-        }
-        return elements.get(id);
-      },
-      querySelectorAll() {
-        return [];
-      },
-      querySelector() {
-        return null;
-      },
-      createElement() {
-        return createPopupTestElement();
-      }
-    },
-    performance: {
-      now() {
-        now += 5;
-        return now;
-      },
-      getEntriesByType(type) {
-        if (type === 'paint') {
-          return options.omitFcp
-            ? [{ name: 'first-paint', startTime: 45 }]
-            : [
-              { name: 'first-paint', startTime: 45 },
-              { name: 'first-contentful-paint', startTime: 50 }
-            ];
-        }
-        if (type === 'navigation') {
-          return [{
-            responseEnd: 3,
-            domContentLoadedEventStart: 20,
-            domContentLoadedEventEnd: 25,
-            domComplete: 35,
-            loadEventEnd: 40
-          }];
-        }
-        if (type === 'resource') {
-          if (options.resourceTimingFailure) {
-            throw new Error('resource timing failed');
-          }
-          return [
-            { name: 'chrome-extension://test/popup.css', startTime: 2.04, responseEnd: 7.06, duration: 5.02 },
-            { name: 'chrome-extension://test/grouping.js', startTime: 3.04, responseEnd: 8.06, duration: 5.02 },
-            { name: 'chrome-extension://test/popup.js', startTime: 4.04, responseEnd: 9.06, duration: 5.02 }
-          ];
-        }
-        return [];
-      }
-    },
-    PerformanceObserver: class {
-      constructor(callback) {
-        this.callback = callback;
-      }
-
-      observe(observerOptions) {
-        if (options.paintUnsupported && observerOptions.type === 'paint') {
-          throw new Error('paint unsupported');
-        }
-      }
-
-      takeRecords() {
-        if (options.drainFailure) {
-          throw new Error('takeRecords failed');
-        }
-        return [];
-      }
-
-      disconnect() {
-        if (options.drainFailure) {
-          throw new Error('disconnect failed');
-        }
-      }
-    },
-    chrome: {
-      runtime: {
-        getManifest() {
-          return { version: '0.2.5' };
-        },
-        sendMessage() {
-          return Promise.resolve({ ok: true, payload: { duplicateCount: 0 } });
-        }
-      },
-      commands: {
-        getAll() {
-          return Promise.resolve([]);
-        }
-      },
-      sessions: {
-        onChanged: {
-          addListener() {}
-        }
-      },
-      tabs: {
-        query(queryInfo) {
-          if (options.startupFailure && queryInfo.currentWindow) {
-            return Promise.reject(new Error('tabs query failed'));
-          }
-          const tabs = [
-            { id: 1, title: '当前页', url: 'https://example.com/a', active: true, index: 0, windowId: 1, groupId: -1 },
-            { id: 2, title: '另一页', url: 'https://example.com/b', active: false, index: 1, windowId: 1, groupId: -1 }
-          ];
-          return Promise.resolve(queryInfo.currentWindow ? tabs : tabs);
-        }
-      },
-      storage: {
-        local: {
-          get(keys) {
-            if (keys.includes('tabgod.popupPerformanceHistory')) {
-              performanceStorageOperations.push('get');
-            }
-            return Promise.resolve(keys.reduce((result, key) => {
-              if (Object.prototype.hasOwnProperty.call(storedState, key)) {
-                result[key] = storedState[key];
-              }
-              return result;
-            }, {}));
-          },
-          set(values) {
-            if (Object.prototype.hasOwnProperty.call(values, 'tabgod.popupPerformanceHistory')) {
-              performanceStorageOperations.push('set');
-            }
-            if (options.localWriteFailure) {
-              return Promise.reject(new Error('local write failed'));
-            }
-            Object.assign(storedState, values);
-            return Promise.resolve();
-          },
-          remove(key) {
-            delete storedState[key];
-            return Promise.resolve();
-          }
-        },
-        session: {
-          get(keys) {
-            if (options.sessionFailure) {
-              return Promise.reject(new Error('session read failed'));
-            }
-            return Promise.resolve(keys.reduce((result, key) => {
-              if (Object.prototype.hasOwnProperty.call(sessionState, key)) {
-                result[key] = sessionState[key];
-              }
-              return result;
-            }, {}));
-          },
-          set(values) {
-            if (options.sessionFailure) {
-              return Promise.reject(new Error('session write failed'));
-            }
-            Object.assign(sessionState, values);
-            return Promise.resolve();
-          }
-        }
-      }
-    },
-    crypto: {
-      randomUUID() {
-        return 'lifecycle-session';
-      }
-    },
-    navigator: {
-      userAgent: 'Chrome/138.0.0.0'
-    },
-    window: {
-      addEventListener(type, listener) {
-        windowListeners[type] = listener;
-      },
-      setTimeout(callback) {
-        timers.push(callback);
-        return timers.length;
-      },
-      clearTimeout() {},
-      requestAnimationFrame(callback) {
-        animationFrames.push(callback);
-        return animationFrames.length;
-      },
-      requestIdleCallback(callback) {
-        return 1;
-      },
-      prompt() {
-        return null;
-      },
-      confirm() {
-        return false;
-      }
-    },
-    Intl,
-    Date,
-    Number,
-    String,
-    Array,
-    Set,
-    Map,
-    Promise
-  };
-
-  vm.createContext(lifecycleSandbox);
-  vm.runInContext(groupingContent, lifecycleSandbox, { filename: 'grouping.js' });
-  vm.runInContext(fs.readFileSync(popupPath, 'utf8'), lifecycleSandbox, { filename: 'popup.js' });
-  vm.runInContext(`
-    const lifecycleOriginalLoadState = loadState;
-    loadState = (options = {}) => {
-      lifecycleLoadPromise = lifecycleOriginalLoadState(Object.assign({}, options, {
-        skipDuplicateOverview: true
-      }));
-      return lifecycleLoadPromise;
-    };
-  `, lifecycleSandbox);
-
-  return {
-    animationFrames,
-    documentListeners,
-    lifecycleSandbox,
-    performanceStorageOperations,
-    sessionState,
-    storedState,
-    timers,
-    windowListeners
-  };
-}
-
-async function runPopupPerformanceLifecycle(harness) {
-  const {
-    animationFrames,
-    documentListeners,
-    lifecycleSandbox,
-    performanceStorageOperations,
-    timers,
-    windowListeners
-  } = harness;
-
-  documentListeners.DOMContentLoaded();
-  await lifecycleSandbox.lifecycleLoadPromise;
-  assert.strictEqual(vm.runInContext('popupPerformance.initialLoadSettled', lifecycleSandbox), true);
-  assert.strictEqual(animationFrames.length, 1);
-  assert.deepStrictEqual(performanceStorageOperations, []);
-
-  animationFrames.shift()();
-  assert.strictEqual(animationFrames.length, 1);
-  assert.deepStrictEqual(performanceStorageOperations, []);
-  animationFrames.shift()();
-  assert.deepStrictEqual(performanceStorageOperations, []);
-
-  windowListeners.load();
-  assert.strictEqual(timers.length, 1);
-  assert.deepStrictEqual(performanceStorageOperations, []);
-  timers.shift()();
-  const persistPromise = vm.runInContext('popupPerformance.persistPromise', lifecycleSandbox);
-  if (persistPromise) {
-    await persistPromise;
-  }
-
-  return persistPromise;
-}
-
-async function assertPopupPerformanceLifecycleContract() {
-  const complete = createPopupPerformanceLifecycleHarness();
-  await runPopupPerformanceLifecycle(complete);
-
-  assert.deepStrictEqual(complete.performanceStorageOperations, ['get', 'set']);
-  const sample = complete.storedState['tabgod.popupPerformanceHistory'].samples[0];
-  assert.strictEqual(sample.derived.navigationToUsable, Math.max(
-    sample.points.firstContentfulPaint,
-    sample.points.usablePaintOpportunity
-  ));
-  assert.ok(sample.points.usableReadyToPaint > sample.stages.render.end);
-  assert.ok(sample.points.usableReadyToPaint > sample.points.controlsReady);
-  assert.ok(sample.points.usablePaintOpportunity > sample.points.usableReadyToPaint);
-  assert.ok(sample.points.popupScriptEnd < sample.points.domContentLoadedHandlerStart);
-  assert.strictEqual(sample.resourceEntryCount, 3);
-  assert.strictEqual(sample.resources['popup.css'].start, 2);
-  assert.strictEqual(sample.resources['popup.css'].responseEnd, 7.1);
-  assert.strictEqual(sample.resources['popup.css'].duration, 5);
-  assert.strictEqual(sample.resources['grouping.js'].start, 3);
-  assert.strictEqual(sample.resources['grouping.js'].responseEnd, 8.1);
-  assert.strictEqual(sample.resources['grouping.js'].duration, 5);
-  assert.strictEqual(sample.resources['popup.js'].start, 4);
-  assert.strictEqual(sample.resources['popup.js'].responseEnd, 9.1);
-  assert.strictEqual(sample.resources['popup.js'].duration, 5);
-  assert.strictEqual(sample.navigation.loadEnd, 40);
-  assert.strictEqual(sample.outcome.measurement, 'complete');
-
-  const resourceTimingFailure = createPopupPerformanceLifecycleHarness({ resourceTimingFailure: true });
-  await runPopupPerformanceLifecycle(resourceTimingFailure);
-  const resourceTimingFailureSample = resourceTimingFailure
-    .storedState['tabgod.popupPerformanceHistory'].samples[0];
-  assert.strictEqual(resourceTimingFailureSample.resourceEntryCount, null);
-  assert.strictEqual(resourceTimingFailureSample.resources['popup.js'].responseEnd, null);
-  assert.strictEqual(resourceTimingFailureSample.outcome.measurement, 'complete');
-
-  const startupFailure = createPopupPerformanceLifecycleHarness({ startupFailure: true });
-  await runPopupPerformanceLifecycle(startupFailure);
-  const startupFailureSample = startupFailure.storedState['tabgod.popupPerformanceHistory'].samples[0];
-  assert.strictEqual(startupFailureSample.outcome.startup, 'error');
-  assert.strictEqual(startupFailureSample.outcome.measurement, 'partial');
-
-  const paintUnsupported = createPopupPerformanceLifecycleHarness({ paintUnsupported: true });
-  await runPopupPerformanceLifecycle(paintUnsupported);
-  const paintUnsupportedSample = paintUnsupported.storedState['tabgod.popupPerformanceHistory'].samples[0];
-  assert.strictEqual(paintUnsupportedSample.outcome.measurement, 'partial');
-  assert.strictEqual(paintUnsupportedSample.points.firstContentfulPaint, null);
-  assert.strictEqual(
-    paintUnsupportedSample.derived.navigationToUsable,
-    paintUnsupportedSample.points.usablePaintOpportunity
-  );
-
-  const missingFcp = createPopupPerformanceLifecycleHarness({ omitFcp: true });
-  await runPopupPerformanceLifecycle(missingFcp);
-  assert.deepStrictEqual(missingFcp.performanceStorageOperations, []);
-  assert.strictEqual('tabgod.popupPerformanceHistory' in missingFcp.storedState, false);
-
-  const observerAndSessionFailure = createPopupPerformanceLifecycleHarness({
-    drainFailure: true,
-    sessionFailure: true
-  });
-  await runPopupPerformanceLifecycle(observerAndSessionFailure);
-  const partialSample = observerAndSessionFailure.storedState['tabgod.popupPerformanceHistory'].samples[0];
-  assert.strictEqual(partialSample.outcome.measurement, 'partial');
-  assert.strictEqual(partialSample.session.id, null);
-  assert.strictEqual(partialSample.session.recordedPopupIndex, null);
-  assert.strictEqual(partialSample.session.firstRecordedPopup, null);
-
-  const localWriteFailure = createPopupPerformanceLifecycleHarness({ localWriteFailure: true });
-  await runPopupPerformanceLifecycle(localWriteFailure);
-  assert.strictEqual('tabgod.popupPerformanceHistory' in localWriteFailure.storedState, false);
-  assert.strictEqual(
-    vm.runInContext('popupPerformance.status', localWriteFailure.lifecycleSandbox),
-    'unavailable'
-  );
-
-  const damagedHistory = createPopupPerformanceLifecycleHarness({ damagedHistory: true });
-  await runPopupPerformanceLifecycle(damagedHistory);
-  const rebuiltHistory = damagedHistory.storedState['tabgod.popupPerformanceHistory'];
-  assert.strictEqual(rebuiltHistory.schemaVersion, 1);
-  assert.strictEqual(rebuiltHistory.samples.length, 1);
-  assert.strictEqual('marker' in rebuiltHistory.samples[0], false);
-}
-
 async function runAsyncChecks() {
+  await assertPopupProgressiveInitialLoadContract();
   await assertPopupUnifiedSearchStateContract();
   await assertPopupSearchInteractionContract();
-  await assertPopupPerformanceContract();
-  await assertPopupPerformanceLifecycleContract();
 
   const organizeWorkflowTabs = batchNormalizationTabs.slice(0, 12).map((tab) => Object.assign({}, tab, {
     groupId: -1
@@ -3240,8 +2724,36 @@ async function runAsyncChecks() {
   });
   assert.ok(savedCleanupResult.cleanupToken);
   assert.strictEqual(savedCleanupResult.cleanupTabCount, 8);
+  assert.strictEqual(savedCleanupResult.workspace, undefined);
+  assert.strictEqual(savedCleanupResult.session, undefined);
   assert.strictEqual(cleanupLocalState['tabgod.sessions'].length, 1);
+  const storedWorkspace = cleanupLocalState['tabgod.sessions'][0];
+  assert.deepStrictEqual(Object.keys(storedWorkspace).sort(), [
+    'activeUrl',
+    'createdAt',
+    'favorite',
+    'favoritedAt',
+    'groupCount',
+    'id',
+    'name',
+    'sourceWindowId',
+    'tabs'
+  ]);
+  assert.deepStrictEqual(Object.keys(storedWorkspace.tabs[0]).sort(), ['id', 'pinned', 'title', 'url']);
+  assert.strictEqual(storedWorkspace.groupCount, 1);
   assert.ok(cleanupLocalSets.every((values) => !Object.prototype.hasOwnProperty.call(values, 'tabgod.settings')));
+
+  backgroundSandbox.queryCurrentWindowTabs = async () => Array.from(cleanupTabs.values());
+  const managementState = await backgroundSandbox.getManagementState();
+  assert.deepStrictEqual(Object.keys(managementState.sessions[0]).sort(), [
+    'createdAt',
+    'favorite',
+    'groupCount',
+    'id',
+    'name',
+    'tabCount'
+  ]);
+  assert.strictEqual(managementState.sessions[0].tabCount, 8);
 
   cleanupTabs.get(405).url = 'https://example.com/already-changed';
   cleanupTabs.get(406).windowId = 42;
@@ -3580,7 +3092,8 @@ async function runAsyncChecks() {
 
   const pendingRestoreOperations = {
     createdUrls: [],
-    grouped: []
+    grouped: [],
+    updated: []
   };
   const pendingRestoreTabs = [];
   backgroundSandbox.chrome.storage = {
@@ -3618,7 +3131,19 @@ async function runAsyncChecks() {
         'tabgod.settings': {
           minTabsPerGroup: 2,
           priorityGroups: [],
-          groupRules: []
+          groupRules: [
+            {
+              id: 'restore-title-rule',
+              name: '恢复标题规则',
+              enabled: true,
+              targetGroupKey: 'custom:项目',
+              targetTitle: '项目',
+              minTabsPerGroup: 1,
+              conditionTree: makeConditionTree([
+                { field: 'title', operator: 'contains', value: '项目' }
+              ])
+            }
+          ]
         }
       })
     }
@@ -3629,7 +3154,7 @@ async function runAsyncChecks() {
     create: async (options) => {
       const createdTab = Object.assign({
         id: 931 + pendingRestoreOperations.createdUrls.length,
-        title: '待恢复页面',
+        title: pendingRestoreOperations.createdUrls.length === 1 ? '当前文档' : '',
         groupId: -1,
         index: pendingRestoreOperations.createdUrls.length
       }, options);
@@ -3644,7 +3169,9 @@ async function runAsyncChecks() {
     }
   };
   backgroundSandbox.chrome.tabGroups = {
-    update: async () => undefined
+    update: async (groupId, options) => {
+      pendingRestoreOperations.updated.push({ groupId, options });
+    }
   };
 
   const pendingRestoreResult = await backgroundSandbox.restoreSession('session-pending-url', {
@@ -3654,7 +3181,8 @@ async function runAsyncChecks() {
     'https://a.ldxp.com/home',
     'https://b.ldxp.com/docs'
   ]);
-  assert.deepStrictEqual(pendingRestoreOperations.grouped, [[931, 932]]);
+  assert.deepStrictEqual(pendingRestoreOperations.grouped, [[931]]);
+  assert.strictEqual(pendingRestoreOperations.updated[0].options.title, '项目');
   assert.strictEqual(pendingRestoreResult.failedCount, 0);
 
   backgroundSandbox.chrome.tabGroups.update = async () => {
@@ -3757,6 +3285,8 @@ async function runAsyncChecks() {
   assert.strictEqual(createdRuleResult.rule.conditionTree.logic, 'or');
   assert.strictEqual(createdRuleResult.rule.conditionTree.children.length, 2);
   assert.strictEqual(createdRuleResult.rule.conditions, undefined);
+  assert.strictEqual(createdRuleResult.rule.createdAt, undefined);
+  assert.strictEqual(createdRuleResult.rule.updatedAt, undefined);
   assert.strictEqual(createdRuleResult.settings.groupRules.length, 1);
 
   await assert.rejects(

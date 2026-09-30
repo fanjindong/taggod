@@ -36,6 +36,7 @@ const state = {
   query: '',
   visibleTabs: [],
   selectedIndex: 0,
+  selectedResultKey: null,
   colorScheme: DEFAULT_COLOR_SCHEME,
   moreToolsVisible: false,
   busy: false,
@@ -217,6 +218,10 @@ async function loadCommandShortcuts() {
 }
 
 function handlePopupShortcutKeydown(event) {
+  if (event.isComposing) {
+    return;
+  }
+
   const shortcutParts = state.openShortcut.toLowerCase().split('+');
   const shortcutKey = shortcutParts.pop();
   const eventKeyAliases = { ' ': 'space', ',': 'comma', '.': 'period' };
@@ -490,6 +495,7 @@ function bindEvents() {
   document.getElementById('searchInput').addEventListener('input', (event) => {
     state.query = event.target.value.trim().toLowerCase();
     state.selectedIndex = 0;
+    state.selectedResultKey = null;
     renderOverview();
     renderTabs();
     if (state.query) {
@@ -498,6 +504,7 @@ function bindEvents() {
   });
   document.getElementById('searchInput').addEventListener('keydown', handleSearchKeydown);
   document.getElementById('searchResultList').addEventListener('keydown', handleSearchResultListKeydown);
+  document.getElementById('searchResultList').addEventListener('focusin', syncSelectedIndexFromSearchResultFocus);
   document.getElementById('sortHelpButton').addEventListener('click', toggleSortHelp);
   document.getElementById('moreToolsButton').addEventListener('click', toggleMoreTools);
   document.querySelectorAll('input[name="colorScheme"]').forEach((input) => {
@@ -536,8 +543,9 @@ async function runAction(action, payload = {}, options = {}) {
     setStatus(message);
 
     if (action === 'organize-tabs') {
-      setMainActionLabel('已整理');
-      setActionStatus(message, { success: true });
+      const partiallyFailed = result.failedMoveCount > 0 || result.failedGroupCount > 0;
+      setMainActionLabel(partiallyFailed ? '部分完成' : '已整理');
+      setActionStatus(message, { success: !partiallyFailed, error: partiallyFailed });
       resetMainActionLabelLater();
     }
 
@@ -714,6 +722,11 @@ function getSearchResultGroupLabel(tab) {
 }
 
 function handleSearchResultNavigationKeydown(event, options = {}) {
+  // 输入法的方向键和确认键属于选字操作，不应同时选择或打开标签。
+  if (event.isComposing) {
+    return false;
+  }
+
   const visibleTabs = state.visibleTabs;
 
   if (event.key === 'ArrowDown') {
@@ -749,6 +762,10 @@ function handleSearchKeydown(event) {
 }
 
 function handleSearchResultListKeydown(event) {
+  if (event.isComposing) {
+    return false;
+  }
+
   const closeButton = event.target && typeof event.target.closest === 'function'
     ? event.target.closest('.quick-result-close-button')
     : null;
@@ -770,6 +787,7 @@ function selectSearchResult(index, shouldFocus) {
   const tabList = document.getElementById('searchResultList');
   const items = tabList ? tabList.querySelectorAll('.quick-result-item') : [];
   const selectedIndex = clampSelectedIndex(index, state.visibleTabs.length);
+  state.selectedResultKey = getSearchResultKey(state.visibleTabs[selectedIndex]);
 
   if (items.length !== state.visibleTabs.length) {
     state.selectedIndex = selectedIndex;
@@ -824,8 +842,12 @@ function syncSelectedIndexFromSearchResultElement(element) {
   }
 
   // 焦点可能通过 Tab 直接进入列表里的按钮，这里同步选中项，确保回车打开的始终是当前焦点项。
-  state.selectedIndex = clampSelectedIndex(focusedIndex, state.visibleTabs.length);
+  selectSearchResult(focusedIndex, false);
   return state.visibleTabs[state.selectedIndex] || null;
+}
+
+function getSearchResultKey(tab) {
+  return tab ? `${tab.resultType || 'open'}:${tab.id}` : null;
 }
 
 function syncSelectedIndexFromSearchResultFocus(event) {
@@ -1893,17 +1915,32 @@ function getSelectedDuplicateCloseCount() {
 
 function renderTabs() {
   const tabList = document.getElementById('searchResultList');
+  const focusedElement = document.activeElement;
+  const restoreResultFocus = Boolean(focusedElement && tabList.contains(focusedElement));
+  const restoreCloseFocus = restoreResultFocus && Boolean(focusedElement.closest('.quick-result-close-button'));
   tabList.classList.toggle('is-searching', Boolean(state.query));
   const visibleTabs = getVisibleTabs();
+  // 用户已选定页面后，异步补入其他窗口或关闭记录只能改变位置，不能更换目标。
+  const preservedIndex = state.selectedResultKey === null
+    ? -1
+    : visibleTabs.findIndex((tab) => getSearchResultKey(tab) === state.selectedResultKey);
+  const selectedIndex = preservedIndex >= 0
+    ? preservedIndex
+    : clampSelectedIndexAfterClose(state.selectedIndex, visibleTabs.length);
   state.visibleTabs = visibleTabs;
-  const selectedIndex = clampSelectedIndex(state.selectedIndex, visibleTabs.length);
   state.selectedIndex = selectedIndex;
+  if (state.selectedResultKey !== null) {
+    state.selectedResultKey = getSearchResultKey(visibleTabs[selectedIndex]);
+  }
   document.getElementById('visibleCount').textContent = `${visibleTabs.length} 个结果`;
   document.getElementById('resultTitle').textContent = state.query ? '搜索结果' : '最近使用';
   renderSortHelp();
   tabList.innerHTML = '';
 
   if (visibleTabs.length === 0) {
+    if (restoreResultFocus) {
+      tabList.focus({ preventScroll: true });
+    }
     if (state.query && state.recentlyClosedTabsLoading) {
       tabList.appendChild(createEmptyState('正在补充最近关闭记录', '已打开标签页没有匹配，稍后会继续更新结果。'));
       return;
@@ -1966,6 +2003,9 @@ function renderTabs() {
   });
 
   keepSelectedResultVisible(tabList);
+  if (restoreResultFocus) {
+    focusSelectedSearchResult(restoreCloseFocus);
+  }
 }
 
 function keepSelectedResultVisible(tabList) {
@@ -1977,13 +2017,17 @@ function keepSelectedResultVisible(tabList) {
   }
 }
 
-function focusSelectedSearchResult() {
+function focusSelectedSearchResult(preferCloseButton = false) {
   const tabList = document.getElementById('searchResultList');
   if (!tabList) {
     return;
   }
 
-  const selectedOpenButton = tabList.querySelector('.quick-result-item.is-selected .quick-result-open-button');
+  const selectedCloseButton = preferCloseButton
+    ? tabList.querySelector('.quick-result-item.is-selected .quick-result-close-button')
+    : null;
+  const selectedOpenButton = selectedCloseButton
+    || tabList.querySelector('.quick-result-item.is-selected .quick-result-open-button');
 
   if (selectedOpenButton && typeof selectedOpenButton.focus === 'function') {
     selectedOpenButton.focus({ preventScroll: true });
@@ -2446,7 +2490,24 @@ function setRuleFormStatus(text, options = {}) {
 
 function formatActionResult(action, result) {
   if (action === 'organize-tabs') {
-    return `已整理 ${result.organizedCount} 个标签，创建 ${result.groupCount} 个分组`;
+    const changes = [];
+    if (result.movedCount > 0) changes.push(`移动 ${result.movedCount} 个标签`);
+    if (result.groupCount > 0) changes.push(`创建 ${result.groupCount} 个分组`);
+    if (result.updatedGroupCount > 0) changes.push(`更新 ${result.updatedGroupCount} 个分组`);
+    if (result.ungroupedTabCount > 0) changes.push(`取消 ${result.ungroupedTabCount} 个标签的分组`);
+
+    const failures = [];
+    if (result.failedMoveCount > 0) failures.push(`${result.failedMoveCount} 个标签未能移动`);
+    if (result.failedGroupCount > 0) failures.push(`${result.failedGroupCount} 处分组调整失败`);
+    if (changes.length === 0 && failures.length === 0) {
+      return '已是目标顺序与分组，无需调整';
+    }
+
+    return [
+      ...changes,
+      ...(result.unchangedCount > 0 ? [`${result.unchangedCount} 个标签无需移动`] : []),
+      ...failures
+    ].join('，');
   }
 
   if (action === 'save-workspace') {

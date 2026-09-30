@@ -623,28 +623,60 @@ async function organizeTabs() {
   const tabs = await queryCurrentWindowTabs();
   const stored = await chrome.storage.local.get([STORAGE_KEYS.settings]);
   const settings = normalizeSettings(stored[STORAGE_KEYS.settings]);
+  const result = { movedCount: 0, unchangedCount: 0, failedMoveCount: 0 };
 
   if (tabs.length === 0) {
-    return { organizedCount: 0, groupCount: 0 };
+    return Object.assign(result, { groupCount: 0, updatedGroupCount: 0, ungroupedTabCount: 0, failedGroupCount: 0 });
   }
 
+  const windowId = getWindowIdFromTabs(tabs);
   const sortedTabs = buildOrganizedTabsFromNormalizedSettings(tabs, settings);
+  let currentTabIds = [...tabs].sort((left, right) => left.index - right.index).map((tab) => tab.id);
 
   for (let index = 0; index < sortedTabs.length; index += 1) {
     const tab = sortedTabs[index];
 
-    if (typeof tab.id === 'number') {
-      // 逐个移动可以减少跨固定标签区域移动导致的失败，失败标签不会阻断后续整理。
-      await chrome.tabs.move(tab.id, { index }).catch(() => undefined);
+    if (currentTabIds[index] === tab.id) {
+      result.unchangedCount += 1;
+      continue;
+    }
+
+    const currentIndex = currentTabIds.indexOf(tab.id);
+    if (currentIndex < 0) {
+      result.failedMoveCount += 1;
+      continue;
+    }
+
+    try {
+      const movedTab = await chrome.tabs.move(tab.id, { index });
+
+      if (movedTab.index !== index || movedTab.windowId !== windowId) {
+        throw new Error('标签未移动到目标位置');
+      }
+
+      // 前一次移动会改变后续标签的位置，不能再用最初快照的 index 判断是否需要移动。
+      currentTabIds.splice(currentIndex, 1);
+      currentTabIds.splice(index, 0, tab.id);
+      result.movedCount += 1;
+    } catch (error) {
+      result.failedMoveCount += 1;
+      // 拖动或关闭可能令移动失败，重新读取原窗口后继续，避免沿用失效的位置。
+      currentTabIds = (await queryWindowTabs(windowId))
+        .sort((left, right) => left.index - right.index).map((item) => item.id);
     }
   }
 
-  const reconcileResult = await reconcileCurrentWindowGroupsFromNormalizedSettings(settings);
+  const currentTabs = result.movedCount > 0 || result.failedMoveCount > 0
+    ? await queryWindowTabs(windowId)
+    : tabs;
+  const reconcileResult = await reconcileWindowGroupsFromTabs(currentTabs, settings);
 
-  return {
-    organizedCount: tabs.length,
-    groupCount: reconcileResult.groupedCount
-  };
+  return Object.assign(result, {
+    groupCount: reconcileResult.groupedCount,
+    updatedGroupCount: reconcileResult.updatedGroupCount,
+    ungroupedTabCount: reconcileResult.ungroupedTabCount,
+    failedGroupCount: reconcileResult.failedGroupCount
+  });
 }
 
 async function reconcileWindowGroupsFromTabs(tabs, normalizedSettings) {
@@ -674,6 +706,8 @@ async function reconcileWindowGroupsFromTabs(tabs, normalizedSettings) {
   let groupIndex = 0;
   let createdGroupCount = 0;
   let ungroupedTabCount = 0;
+  let updatedGroupCount = 0;
+  let failedGroupCount = 0;
   const titleMap = buildResolvedGroupTitleMapFromGroupInfos(groupInfos, normalizedSettings);
 
   for (const [groupKey, groupTabs] of groups.entries()) {
@@ -686,10 +720,12 @@ async function reconcileWindowGroupsFromTabs(tabs, normalizedSettings) {
 
       if (groupedTabIds.length > 0) {
         // 配置调高后，旧原生分组不再满足阈值，必须取消才能让当前页面状态和配置一致。
-        const ungroupedCount = await chrome.tabs.ungroup(groupedTabIds)
-          .then(() => groupedTabIds.length)
-          .catch(() => 0);
-        ungroupedTabCount += ungroupedCount;
+        try {
+          await chrome.tabs.ungroup(groupedTabIds);
+          ungroupedTabCount += groupedTabIds.length;
+        } catch (error) {
+          failedGroupCount += 1;
+        }
       }
 
       continue;
@@ -700,26 +736,36 @@ async function reconcileWindowGroupsFromTabs(tabs, normalizedSettings) {
       && existingGroupId >= 0
       && groupTabs.every((tab) => tab.groupId === existingGroupId)
       && nativeGroupKeys.get(existingGroupId).size === 1;
-    const groupId = canReuseGroup
-      ? existingGroupId
-      : await chrome.tabs.group({ tabIds }).catch(() => null);
-
-    if (typeof groupId === 'number') {
-      await chrome.tabGroups.update(groupId, {
-        title: titleMap.get(groupKey) || groupKey,
-        color: getGroupColor(groupIndex)
-      });
-      groupIndex += 1;
-
-      if (!canReuseGroup) {
+    let groupId = existingGroupId;
+    if (!canReuseGroup) {
+      try {
+        groupId = await chrome.tabs.group({ tabIds });
         createdGroupCount += 1;
+      } catch (error) {
+        failedGroupCount += 1;
+        continue;
+      }
+    }
+
+    const desiredGroup = {
+      title: titleMap.get(groupKey) || groupKey,
+      color: getGroupColor(groupIndex)
+    };
+    groupIndex += 1;
+    const existingGroup = canReuseGroup ? await chrome.tabGroups.get(groupId) : null;
+    if (!existingGroup || existingGroup.title !== desiredGroup.title || existingGroup.color !== desiredGroup.color) {
+      await chrome.tabGroups.update(groupId, desiredGroup);
+      if (canReuseGroup) {
+        updatedGroupCount += 1;
       }
     }
   }
 
   return {
     groupedCount: createdGroupCount,
-    ungroupedTabCount
+    ungroupedTabCount,
+    updatedGroupCount,
+    failedGroupCount
   };
 }
 
@@ -1834,6 +1880,10 @@ async function handleCommand(command) {
 
   try {
     const result = await operation();
+    if (command === 'organize-tabs' && (result.failedMoveCount > 0 || result.failedGroupCount > 0)) {
+      await showCommandBadge('!', COMMAND_BADGE_ERROR_COLOR);
+      return { handled: true, success: false, result };
+    }
     await showCommandBadge('✓', COMMAND_BADGE_SUCCESS_COLOR);
     return { handled: true, success: true, result };
   } catch (error) {

@@ -146,7 +146,6 @@ assert.ok(popupStructureJsContent.includes('function syncSelectedIndexFromSearch
 assert.ok(popupStructureJsContent.includes('function syncSelectedIndexFromSearchResultElement'));
 assert.ok(popupStructureJsContent.includes('function clampSelectedIndexAfterClose'));
 assert.ok(popupStructureJsContent.includes("closest('.quick-result-item')"));
-assert.ok(popupStructureJsContent.includes('state.selectedIndex = clampSelectedIndex(focusedIndex, state.visibleTabs.length);'));
 assert.ok(popupStructureJsContent.includes('state.selectedIndex = clampSelectedIndexAfterClose(state.selectedIndex, remainingVisibleCount);'));
 assert.ok(popupStructureJsContent.includes('return total - 1;'));
 assert.ok(popupStructureJsContent.includes('function handleSearchResultNavigationKeydown'));
@@ -2380,10 +2379,302 @@ assert.ok(usageSvgContent.includes('最近使用与键盘选择'));
 assert.ok(usageSvgContent.includes('分组规则是核心能力'));
 assert.ok(usageSvgContent.includes('满足全部或满足任一'));
 
+async function assertSearchSelectionStabilityContract() {
+  const elements = new Map();
+  const timers = [];
+  const openedIds = [];
+  let resolveClosedResults;
+  const document = {
+    activeElement: null,
+    addEventListener() {},
+    querySelectorAll() { return []; },
+    getElementById(id) {
+      if (!elements.has(id)) elements.set(id, createElement());
+      return elements.get(id);
+    },
+    createElement
+  };
+
+  // 只模拟结果列表实际用到的焦点、父子关系和事件，验证重建 DOM 后仍能连续键盘操作。
+  function createElement() {
+    const element = createPopupTestElement();
+    element.children = [];
+    element.listeners = {};
+    element.className = '';
+    const hasClass = (name) => element.className.split(' ').includes(name);
+    element.classList = {
+      add(name) { if (!hasClass(name)) element.className += ` ${name}`; },
+      remove(name) { element.className = element.className.split(' ').filter((value) => value !== name).join(' '); },
+      toggle(name, enabled) { this[enabled ? 'add' : 'remove'](name); }
+    };
+    Object.defineProperty(element, 'innerHTML', {
+      get() { return this.html || ''; },
+      set(value) { this.html = value; this.children = []; }
+    });
+    element.addEventListener = (type, listener) => { element.listeners[type] = listener; };
+    element.appendChild = (child) => { child.parentElement = element; element.children.push(child); };
+    element.contains = (target) => target === element || element.children.some((child) => child.contains(target));
+    element.closest = (selector) => hasClass(selector.slice(1))
+      ? element
+      : element.parentElement ? element.parentElement.closest(selector) : null;
+    element.querySelectorAll = (selector) => {
+      const [ancestor, descendant] = selector.split(' ');
+      const matches = [];
+      for (const child of element.children) {
+        if (ancestor.slice(1).split('.').every((name) => child.className.split(' ').includes(name))) {
+          matches.push(...(descendant ? child.querySelectorAll(descendant) : [child]));
+        }
+        matches.push(...child.querySelectorAll(selector));
+      }
+      return matches;
+    };
+    element.querySelector = (selector) => element.querySelectorAll(selector)[0] || null;
+    element.focus = () => {
+      document.activeElement = element;
+      const list = elements.get('searchResultList');
+      if (list && list.contains(element) && list.listeners.focusin) {
+        list.listeners.focusin({ target: element });
+      }
+    };
+    return element;
+  }
+
+  const sandbox = {
+    URL, document,
+    window: { setTimeout(callback) { timers.push(callback); } },
+    chrome: { runtime: { sendMessage: () => new Promise((resolve) => { resolveClosedResults = resolve; }) } }
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(groupingContent, sandbox);
+  vm.runInContext(fs.readFileSync(popupPath, 'utf8'), sandbox);
+  sandbox.recordOpenedResult = (result) => openedIds.push(result.id);
+  vm.runInContext(`
+    openSearchResult = recordOpenedResult;
+    bindEvents();
+    state.query = 'alpha';
+    state.tabs = [
+      { id: 1, title: 'Alpha Guide', url: 'https://example.test/one', lastAccessedAt: 30 },
+      { id: 2, title: 'Alpha Notes', url: 'https://example.test/two', lastAccessedAt: 20 },
+      { id: 3, title: 'Alpha Help', url: 'https://example.test/three', lastAccessedAt: 10 }
+    ];
+    renderTabs();
+  `, sandbox);
+  const selectedId = () => vm.runInContext('state.visibleTabs[state.selectedIndex]?.id', sandbox);
+  const press = (key, extra = {}) => sandbox.handleSearchKeydown({ key, preventDefault() {}, ...extra });
+  const list = document.getElementById('searchResultList');
+  const searchInput = document.getElementById('searchInput');
+  press('ArrowDown');
+  assert.strictEqual(selectedId(), 2);
+
+  for (const key of ['Enter', 'ArrowDown', 'ArrowUp']) {
+    press(key, { isComposing: true, preventDefault() { assert.fail('选字操作不应被阻止'); } });
+  }
+  assert.strictEqual(selectedId(), 2);
+  assert.deepStrictEqual(openedIds, []);
+
+  const pendingClosed = sandbox.loadRecentlyClosedTabs();
+  resolveClosedResults({ ok: true, payload: { recentlyClosedTabs: [{
+    id: 'closed-alpha', resultType: 'recentlyClosed', sessionId: 'alpha-session',
+    title: 'Alpha', url: 'https://example.test/closed'
+  }] } });
+  await pendingClosed;
+  assert.strictEqual(vm.runInContext('state.visibleTabs[0].id', sandbox), 'closed-alpha');
+  assert.strictEqual(selectedId(), 2, '关闭记录补入后应保留用户选择');
+  press('Enter');
+  assert.deepStrictEqual(openedIds, [2]);
+
+  // 聚焦关闭按钮后补入其他窗口页面，重建列表也应恢复同一页面的关闭按钮焦点。
+  list.querySelector('.is-selected .quick-result-close-button').focus();
+  const previousFocusedButton = document.activeElement;
+  sandbox.chrome.tabs = { query: async () => [
+    { id: 4, title: 'Alpha', url: 'https://other.test/alpha', windowId: 2, lastAccessed: 40 },
+    { id: 1, title: 'Alpha Guide', url: 'https://example.test/one', windowId: 1, lastAccessed: 30 },
+    { id: 2, title: 'Alpha Notes', url: 'https://example.test/two', windowId: 1, lastAccessed: 20 },
+    { id: 3, title: 'Alpha Help', url: 'https://example.test/three', windowId: 1, lastAccessed: 10 }
+  ] };
+  sandbox.loadAllTabsAfterInitialRender(vm.runInContext('state.loadVersion', sandbox));
+  await timers.shift()();
+  assert.strictEqual(selectedId(), 2, '其他窗口补入后应保留用户选择');
+  assert.notStrictEqual(document.activeElement, previousFocusedButton);
+  assert.strictEqual(document.activeElement, list.querySelector('.is-selected .quick-result-close-button'));
+  assert.strictEqual(document.activeElement.parentElement.dataset.tabId, '2');
+
+  vm.runInContext('state.tabs.find((tab) => tab.id === 2).audible = true; renderTabs();', sandbox);
+  assert.strictEqual(document.activeElement, list.querySelector('.is-selected .quick-result-open-button'));
+  assert.strictEqual(document.activeElement.parentElement.dataset.tabId, '2');
+
+  // 用户用 Tab 聚焦另一项后，异步排序仍应以该项为目标。
+  list.children[0].children[0].focus();
+  assert.strictEqual(list.querySelectorAll('.is-selected').length, 1);
+  assert.strictEqual(list.querySelector('.is-selected').dataset.tabId, '4');
+  vm.runInContext('state.recentlyClosedTabs = []; renderTabs();', sandbox);
+  assert.strictEqual(selectedId(), 4);
+  assert.strictEqual(document.activeElement.parentElement.dataset.tabId, '4');
+
+  searchInput.focus();
+  searchInput.listeners.input({ target: { value: 'help' } });
+  assert.strictEqual(selectedId(), 3, '更改查询应重新选择最佳匹配');
+  assert.strictEqual(vm.runInContext('state.selectedResultKey', sandbox), null);
+  assert.strictEqual(document.activeElement, searchInput);
+
+  searchInput.listeners.input({ target: { value: 'alpha' } });
+  sandbox.selectSearchResult(3, true);
+  assert.strictEqual(selectedId(), 3);
+  vm.runInContext('state.tabs = state.tabs.filter((tab) => tab.id !== 3); renderTabs();', sandbox);
+  assert.strictEqual(selectedId(), 2, '末项消失后应选择相邻项，不能循环到第一项');
+  assert.strictEqual(document.activeElement.parentElement.dataset.tabId, '2');
+  vm.runInContext('state.tabs = []; renderTabs();', sandbox);
+  assert.strictEqual(selectedId(), undefined);
+  assert.strictEqual(document.activeElement, list);
+}
+
+async function assertOrganizeMinimalWritesContract() {
+  let tabs = [];
+  let settings = { minTabsPerGroup: 2 };
+  const groups = new Map();
+  const writes = [];
+  const queries = [];
+  const badges = [];
+  let focusedWindowId = 1;
+  let failMoveId = null;
+  let failGrouping = false;
+  let nextGroupId = 100;
+  const sandbox = { URL, chrome: {
+    runtime: { onMessage: { addListener() {} } },
+    commands: { onCommand: { addListener() {} } },
+    action: {
+      async setBadgeText({ text }) { badges.push(text); },
+      async setBadgeBackgroundColor() {}
+    },
+    storage: { local: { get: async () => ({ 'tabgod.settings': settings }) } },
+    tabs: {
+      async query(query) {
+        queries.push({ ...query });
+        return tabs.filter((tab) => tab.windowId === (query.currentWindow ? focusedWindowId : query.windowId))
+          .map((tab) => ({ ...tab }));
+      },
+      async move(id, { index }) {
+        writes.push(['move', id, index]);
+        focusedWindowId = 2;
+        if (id === failMoveId) throw new Error('正在拖动标签');
+        const position = tabs.findIndex((tab) => tab.id === id);
+        const [tab] = tabs.splice(position, 1);
+        tabs.splice(index, 0, tab);
+        tabs.filter((item) => item.windowId === 1).forEach((item, i) => { item.index = i; });
+        return { ...tab };
+      },
+      async group({ tabIds }) {
+        writes.push(['group', ...tabIds]);
+        if (failGrouping) throw new Error('创建分组失败');
+        const id = nextGroupId++;
+        tabs.filter((tab) => tabIds.includes(tab.id)).forEach((tab) => { tab.groupId = id; });
+        groups.set(id, { id, title: '', color: 'grey' });
+        return id;
+      },
+      async ungroup(tabIds) {
+        writes.push(['ungroup', ...tabIds]);
+        tabs.filter((tab) => tabIds.includes(tab.id)).forEach((tab) => { tab.groupId = -1; });
+      }
+    },
+    tabGroups: {
+      async get(id) { return { ...groups.get(id) }; },
+      async update(id, properties) {
+        writes.push(['update', id, { ...properties }]);
+        Object.assign(groups.get(id), properties);
+      }
+    }
+  } };
+  vm.createContext(sandbox);
+  vm.runInContext(groupingContent, sandbox);
+  vm.runInContext(backgroundContent, sandbox);
+  const tab = (id, host, groupId = -1, pinned = false) => ({
+    id, url: `https://${host}/`, title: host, windowId: 1, groupId, pinned
+  });
+  const setTabs = (values) => {
+    tabs = values.map((value, index) => ({ ...value, index }));
+    focusedWindowId = 1;
+    writes.length = 0;
+    queries.length = 0;
+  };
+  groups.set(10, { id: 10, title: 'example', color: 'blue', collapsed: true });
+  setTabs([tab(1, 'fixed.test', -1, true), tab(2, 'b.example.com', 10), tab(3, 'a.example.com', 10)]);
+  // 另一窗口在整理期间变为活动窗口，不能改变后续分组的操作范围。
+  tabs.push({ ...tab(9, 'foreign.test'), windowId: 2, index: 0 });
+  const first = await sandbox.organizeTabs();
+  assert.deepStrictEqual(tabs.filter((item) => item.windowId === 1).map((item) => item.id), [1, 3, 2]);
+  assert.deepStrictEqual(writes, [['move', 3, 1]]);
+  assert.strictEqual(first.movedCount, 1);
+  assert.strictEqual(first.unchangedCount, 2);
+  assert.strictEqual(first.failedMoveCount, 0);
+  assert.deepStrictEqual(queries, [{ currentWindow: true }, { windowId: 1 }]);
+  assert.strictEqual(groups.get(10).collapsed, true);
+
+  focusedWindowId = 1;
+  writes.length = 0;
+  const second = await sandbox.organizeTabs();
+  assert.deepStrictEqual(writes, [], '重复整理不得移动标签、重建分组或重复更新元信息');
+  assert.strictEqual(second.unchangedCount, 3);
+  assert.strictEqual(popupSandbox.formatActionResult('organize-tabs', second), '已是目标顺序与分组，无需调整');
+
+  groups.get(10).title = '旧名称';
+  writes.length = 0;
+  const renamed = await sandbox.organizeTabs();
+  assert.deepStrictEqual(writes, [['update', 10, { title: 'example', color: 'blue' }]]);
+  assert.strictEqual(renamed.updatedGroupCount, 1);
+
+  groups.get(10).color = 'red';
+  writes.length = 0;
+  await sandbox.organizeTabs();
+  assert.deepStrictEqual(writes, [['update', 10, { title: 'example', color: 'blue' }]]);
+
+  // 多次移动会改变尚未处理的标签位置；同时覆盖新建分组后的再次整理。
+  setTabs([tab(11, 'a.alpha.com'), tab(12, 'b.beta.com'), tab(13, 'b.alpha.com'), tab(14, 'a.beta.com')]);
+  const regrouped = await sandbox.organizeTabs();
+  assert.deepStrictEqual(tabs.map((item) => item.id), [11, 13, 14, 12]);
+  assert.strictEqual(regrouped.movedCount, 2);
+  assert.strictEqual(regrouped.groupCount, 2);
+  focusedWindowId = 1;
+  writes.length = 0;
+  await sandbox.organizeTabs();
+  assert.deepStrictEqual(writes, []);
+
+  settings = { minTabsPerGroup: 3 };
+  const ungrouped = await sandbox.organizeTabs();
+  assert.strictEqual(ungrouped.ungroupedTabCount, 4);
+  assert.strictEqual(writes.filter(([kind]) => kind === 'ungroup').length, 2);
+  writes.length = 0;
+  await sandbox.organizeTabs();
+  assert.deepStrictEqual(writes, []);
+
+  settings = { minTabsPerGroup: 2 };
+  setTabs([tab(1, 'fixed.test', -1, true), tab(2, 'z.example.com', 10), tab(3, 'b.example.com', 10), tab(4, 'a.example.com', 10)]);
+  failMoveId = 4;
+  const partial = await sandbox.handleCommand('organize-tabs');
+  assert.strictEqual(partial.success, false);
+  assert.strictEqual(partial.result.failedMoveCount, 1);
+  assert.strictEqual(partial.result.movedCount, 1);
+  assert.strictEqual(partial.result.unchangedCount, 2);
+  assert.deepStrictEqual(writes, [['move', 4, 1], ['move', 2, 3]]);
+  assert.ok(queries.slice(1).every((query) => query.windowId === 1));
+  assert.strictEqual(badges.at(-1), '!');
+  assert.ok(popupSandbox.formatActionResult('organize-tabs', partial.result).includes('1 个标签未能移动'));
+
+  failMoveId = null;
+  failGrouping = true;
+  setTabs([tab(21, 'a.example.com'), tab(22, 'b.example.com')]);
+  const groupFailure = await sandbox.handleCommand('organize-tabs');
+  assert.strictEqual(groupFailure.success, false);
+  assert.strictEqual(groupFailure.result.failedGroupCount, 1);
+  assert.strictEqual(badges.at(-1), '!');
+  assert.ok(popupSandbox.formatActionResult('organize-tabs', groupFailure.result).includes('分组调整失败'));
+}
+
 async function runAsyncChecks() {
   await assertPopupProgressiveInitialLoadContract();
   await assertPopupUnifiedSearchStateContract();
   await assertPopupSearchInteractionContract();
+  await assertSearchSelectionStabilityContract();
+  await assertOrganizeMinimalWritesContract();
 
   const organizeWorkflowTabs = batchNormalizationTabs.slice(0, 12).map((tab) => Object.assign({}, tab, {
     groupId: -1
@@ -2819,6 +3110,7 @@ async function runAsyncChecks() {
     }
   };
   backgroundSandbox.chrome.tabGroups = {
+    get: async (groupId) => ({ id: groupId, title: '旧分组', color: 'grey' }),
     update: async (groupId, options) => {
       groupOperations.updated.push({ groupId, options });
     }

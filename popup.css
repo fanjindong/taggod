@@ -117,7 +117,6 @@ h1 {
 .section-title span,
 .status-text,
 .tab-url,
-.session-meta,
 .helper-text {
   color: var(--muted);
 }
@@ -419,8 +418,7 @@ kbd {
   display: none;
 }
 
-.tab-list,
-.session-list {
+.tab-list {
   display: grid;
   gap: 8px;
   max-height: 260px;
@@ -436,8 +434,7 @@ kbd {
   max-height: 172px;
 }
 
-.tab-item,
-.session-item {
+.tab-item {
   display: grid;
   gap: 4px;
   padding: 10px;
@@ -503,31 +500,20 @@ kbd {
   white-space: nowrap;
 }
 
-.session-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .tab-title,
-.tab-url,
-.session-name,
-.session-meta {
+.tab-url {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.tab-title,
-.session-name {
+.tab-title {
   font-size: 13px;
   font-weight: 600;
 }
 
-.tab-url,
-.session-meta {
+.tab-url {
   font-size: 12px;
 }
 
@@ -883,26 +869,6 @@ kbd {
   padding: 0 10px;
 }
 
-.session-actions {
-  flex-wrap: wrap;
-}
-
-.session-actions button {
-  flex: 1 1 64px;
-}
-
-/* 保存后的关闭入口需要醒目，但仍保持用户二次确认的弱破坏感。 */
-.close-saved-button {
-  width: 100%;
-  border-color: #f2b8b5;
-  background: #fff5f5;
-  font-weight: 600;
-}
-
-.close-saved-button:hover {
-  background: #ffeceb;
-}
-
 .empty-state {
   padding: 14px;
   border: 1px dashed var(--line);
@@ -1100,7 +1066,6 @@ kbd {
 }
 
 .tab-list,
-.session-list,
 .group-list,
 .group-rule-list,
 .duplicate-review-list {
@@ -1109,7 +1074,6 @@ kbd {
 }
 
 .tab-item,
-.session-item,
 .group-item,
 .group-rule-item,
 .duplicate-review-item,
@@ -1198,7 +1162,6 @@ kbd {
 }
 
 .tab-title,
-.session-name,
 .group-title,
 .group-rule-main strong,
 .duplicate-review-main strong {
@@ -1207,7 +1170,6 @@ kbd {
 }
 
 .tab-url,
-.session-meta,
 .group-meta,
 .group-rule-main span,
 .duplicate-review-main span,
@@ -1328,10 +1290,6 @@ button:disabled {
   border-color: var(--primary-line);
   color: var(--primary-strong);
   background: var(--primary-soft);
-}
-
-.management-save-workspace-button {
-  width: 100%;
 }
 
 .more-tools-section {
@@ -1543,7 +1501,6 @@ button:disabled {
 
 .inline-actions,
 .review-actions,
-.session-actions,
 .group-rule-actions {
   gap: 8px;
 }

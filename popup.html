@@ -124,7 +124,7 @@
             <button id="managementShortcutsSummary" class="management-summary-button" type="button" data-management-panel-button="shortcuts" aria-expanded="false" aria-controls="managementShortcutsPanel">
               <span class="management-summary-main">
                 <strong>快捷键</strong>
-                <span id="managementShortcutsSummaryText">查看与修改 3 项快捷键</span>
+                <span id="managementShortcutsSummaryText">查看与修改 2 项快捷键</span>
               </span>
               <span class="management-summary-action">设置</span>
             </button>
@@ -132,7 +132,6 @@
               <div class="shortcut-settings-list">
                 <div><span>打开并搜索</span><kbd id="managementOpenShortcutText">读取中</kbd></div>
                 <div><span>整理当前窗口</span><kbd id="managementOrganizeShortcutText">读取中</kbd></div>
-                <div><span>保存工作集</span><kbd id="managementSaveShortcutText">读取中</kbd></div>
               </div>
               <p class="helper-text">快捷键由 Chrome 统一管理，修改后重新打开弹窗即可显示新键位。</p>
               <div class="inline-actions">
@@ -229,38 +228,6 @@
                 </div>
                 <div id="groupList" class="group-list"></div>
               </section>
-            </section>
-          </section>
-
-          <section class="management-summary-item">
-            <button id="managementWorkspaceSummary" class="management-summary-button" type="button" data-management-panel-button="workspace" aria-expanded="false" aria-controls="managementWorkspacePanel">
-              <span class="management-summary-main">
-                <strong>工作集</strong>
-                <span id="managementWorkspaceSummaryText">查看已保存工作集</span>
-              </span>
-              <span class="management-summary-action">查看</span>
-            </button>
-            <section id="managementWorkspacePanel" class="management-panel is-hidden" data-management-panel="workspace" aria-label="工作集" hidden>
-              <button id="saveWorkspaceButton" class="primary-action management-save-workspace-button" type="button">保存当前窗口为工作集</button>
-              <section class="list-section">
-                <div class="section-title">
-                  <h2>工作集</h2>
-                </div>
-                <div id="sessionList" class="session-list"></div>
-              </section>
-            </section>
-          </section>
-
-          <section class="management-summary-item">
-            <button id="managementCleanupSummary" class="management-summary-button" type="button" data-management-panel-button="cleanup" aria-expanded="false" aria-controls="managementCleanupPanel">
-              <span class="management-summary-main">
-                <strong>后续清理</strong>
-                <span id="managementCleanupSummaryText">暂无待处理清理</span>
-              </span>
-              <span class="management-summary-action">处理</span>
-            </button>
-            <section id="managementCleanupPanel" class="management-panel is-hidden" data-management-panel="cleanup" aria-label="后续清理" hidden>
-              <div id="savedCleanupAction" class="saved-cleanup-action"></div>
             </section>
           </section>
         </div>

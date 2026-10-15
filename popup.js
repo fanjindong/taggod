@@ -10,7 +10,6 @@ const state = {
   tabs: [],
   recentlyClosedTabs: [],
   groups: [],
-  sessions: [],
   settings: {
     minTabsPerGroup: 2,
     priorityGroups: [],
@@ -29,8 +28,6 @@ const state = {
     selectedGroupKeys: [],
     resultMessage: ''
   },
-  // 后台保存一次性清理令牌，弹窗只持有令牌摘要，避免直接信任可能过期的标签编号。
-  pendingCleanup: null,
   currentWindowId: null,
   openShortcut: '',
   query: '',
@@ -140,7 +137,6 @@ async function loadPopupStateFromBrowser(options = {}) {
     recentlyClosedTabs: [],
     groups: [],
     overview: buildPopupOverview(allTabs),
-    sessions: [],
     settings,
     colorScheme: normalizeColorScheme(stored[POPUP_STORAGE_KEYS.colorScheme]),
     currentWindowId
@@ -161,11 +157,6 @@ const COMMAND_SHORTCUT_HINTS = [
     managementTextId: 'managementOrganizeShortcutText',
     containerId: 'organizeShortcutHint',
     actionLabel: '整理当前窗口'
-  },
-  {
-    commandName: 'save-session',
-    managementTextId: 'managementSaveShortcutText',
-    actionLabel: '保存工作集'
   }
 ];
 
@@ -292,7 +283,6 @@ async function loadState(options = {}) {
 
     if (!state.managementLoaded) {
       state.groups = data.groups || [];
-      state.sessions = data.sessions || [];
     }
 
     state.settings = data.settings || state.settings;
@@ -434,16 +424,12 @@ async function loadManagementState(options = {}) {
   try {
     const data = await sendMessage('get-management-state');
     state.groups = data.groups || [];
-    state.sessions = data.sessions || [];
-    state.pendingCleanup = data.pendingCleanup || null;
     state.settings = data.settings || state.settings;
     state.managementLoaded = true;
     renderSettings();
     renderGroupRules();
     renderGroupRuleForm();
     renderGroups();
-    renderSessions();
-    renderSavedCleanup();
     renderManagementOverview();
     renderMoreTools();
   } catch (error) {
@@ -480,7 +466,6 @@ function bindEvents() {
   document.getElementById('organizeButton').addEventListener('click', () => runAction('organize-tabs'));
   document.getElementById('scanDuplicatesButton').addEventListener('click', scanDuplicates);
   document.getElementById('duplicateHintText').addEventListener('click', scanDuplicates);
-  document.getElementById('saveWorkspaceButton').addEventListener('click', saveWorkspace);
   document.getElementById('saveGroupThresholdButton').addEventListener('click', saveGroupThreshold);
   document.getElementById('closeSelectedDuplicatesButton').addEventListener('click', closeSelectedDuplicates);
   document.getElementById('rescanDuplicatesButton').addEventListener('click', scanDuplicates);
@@ -975,7 +960,6 @@ function toggleManagementPanel(panelName) {
 function renderManagementOverview() {
   const rules = state.settings.groupRules || [];
   const starredGroupCount = state.groups.filter((group) => group.starred).length;
-  const savedTabCount = state.pendingCleanup ? state.pendingCleanup.tabCount : 0;
   const summaries = [
     {
       key: 'appearance',
@@ -985,7 +969,7 @@ function renderManagementOverview() {
     {
       key: 'shortcuts',
       textId: 'managementShortcutsSummaryText',
-      text: '查看与修改 3 项快捷键'
+      text: '查看与修改 2 项快捷键'
     },
     {
       key: 'rules',
@@ -996,16 +980,6 @@ function renderManagementOverview() {
       key: 'priority',
       textId: 'managementPrioritySummaryText',
       text: state.groups.length > 0 ? `已设 ${starredGroupCount} 个优先分组，共 ${state.groups.length} 个分组` : '当前窗口还没有可整理分组'
-    },
-    {
-      key: 'workspace',
-      textId: 'managementWorkspaceSummaryText',
-      text: state.sessions.length > 0 ? `已保存 ${state.sessions.length} 个工作集` : '还没有保存过工作集'
-    },
-    {
-      key: 'cleanup',
-      textId: 'managementCleanupSummaryText',
-      text: savedTabCount > 0 ? `可关闭 ${savedTabCount} 个已保存标签` : '暂无待处理清理'
     }
   ];
 
@@ -1089,88 +1063,6 @@ async function saveGroupThreshold() {
   }
 }
 
-async function saveWorkspace() {
-  const defaultName = getDefaultWorkspaceName();
-  const name = window.prompt('请输入工作集名称', defaultName);
-
-  if (name === null) {
-    setStatus('已取消保存工作集');
-    return;
-  }
-
-  const trimmedName = name.trim();
-
-  if (!trimmedName) {
-    setStatus('工作集名称不能为空');
-    return;
-  }
-
-  setBusy(true);
-
-  try {
-    const result = await sendMessage('save-workspace', {
-      name: trimmedName,
-      sourceWindowId: state.currentWindowId
-    });
-    state.pendingCleanup = result.cleanupToken ? {
-      token: result.cleanupToken,
-      tabCount: result.cleanupTabCount || 0
-    } : null;
-    state.moreToolsVisible = true;
-    state.activeManagementPanel = 'cleanup';
-    const cleanupHint = state.pendingCleanup
-      ? '，可选择安全关闭仍未变化的标签'
-      : '，但当前无法提供自动关闭入口';
-    setStatus(`已保存 ${result.savedCount} 个标签${cleanupHint}`);
-    setActionStatus(`已保存 ${result.savedCount} 个标签${cleanupHint}`, { success: true });
-    await loadState({ keepStatus: true, keepMoreToolsFocus: true });
-  } catch (error) {
-    setStatus(error.message || '保存工作集失败');
-    setActionStatus(error.message || '保存工作集失败', { error: true });
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function closeLastSavedTabs() {
-  if (!state.pendingCleanup || !state.pendingCleanup.token) {
-    setStatus('没有可关闭的已保存标签');
-    return;
-  }
-
-  setBusy(true);
-
-  try {
-    const result = await sendMessage('close-saved-tabs', { cleanupToken: state.pendingCleanup.token });
-    state.pendingCleanup = null;
-    const resultMessage = `已关闭 ${result.closedCount} 个已保存标签，安全跳过 ${result.skippedCount || 0} 个，失败 ${result.failedCount || 0} 个`;
-    setStatus(resultMessage);
-    invalidateRecentlyClosedTabs();
-    await loadState({ keepStatus: true, keepMoreToolsFocus: true });
-  } catch (error) {
-    // 一次性令牌在后台开始处理时已经消费，失败后不能继续展示可重复点击的旧入口。
-    state.pendingCleanup = null;
-    renderSavedCleanup();
-    renderManagementOverview();
-    setStatus(error.message || '关闭已保存标签失败');
-  } finally {
-    setBusy(false);
-  }
-}
-
-function getDefaultWorkspaceName() {
-  const now = new Date();
-  const date = new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(now);
-
-  return `${date} 的工作集`;
-}
-
 function render() {
   renderSettings();
   renderOverview();
@@ -1178,8 +1070,6 @@ function render() {
     renderGroupRules();
     renderGroupRuleForm();
     renderGroups();
-    renderSessions();
-    renderSavedCleanup();
     renderManagementOverview();
   }
   renderDuplicateReview();
@@ -2039,128 +1929,6 @@ function focusSelectedSearchResult(preferCloseButton = false) {
   }
 }
 
-function renderSessions() {
-  const sessionList = document.getElementById('sessionList');
-  sessionList.innerHTML = '';
-
-  if (state.sessions.length === 0) {
-    sessionList.appendChild(createEmptyState('还没有保存过工作集'));
-    return;
-  }
-
-  state.sessions.forEach((session) => {
-    const item = document.createElement('article');
-    item.className = 'session-item';
-    item.innerHTML = `
-      <div class="session-row">
-        <div class="session-name" title="${escapeHtml(session.name)}">${session.favorite ? '★ ' : ''}${escapeHtml(session.name)}</div>
-      </div>
-      <div class="session-meta">${session.tabCount} 个标签 · ${session.groupCount} 个分组 · ${formatTimestamp(session.createdAt)}</div>
-      <div class="inline-actions session-actions">
-        <button type="button" data-action="restore" data-session-id="${escapeHtml(session.id)}">恢复</button>
-        <button type="button" data-action="restore-new-window" data-session-id="${escapeHtml(session.id)}">新窗口</button>
-        <button type="button" data-action="rename" data-session-id="${escapeHtml(session.id)}">重命名</button>
-        <button type="button" data-action="favorite" data-session-id="${escapeHtml(session.id)}">${session.favorite ? '取消收藏' : '收藏'}</button>
-        <button class="danger-button" type="button" data-action="delete" data-session-id="${escapeHtml(session.id)}">删除</button>
-      </div>
-    `;
-    sessionList.appendChild(item);
-  });
-
-  sessionList.querySelectorAll('button[data-session-id]').forEach((button) => {
-    button.addEventListener('click', () => handleWorkspaceAction(button.dataset.action, button.dataset.sessionId));
-  });
-}
-
-function renderSavedCleanup() {
-  const cleanupAction = document.getElementById('savedCleanupAction');
-
-  if (!cleanupAction) {
-    return;
-  }
-
-  cleanupAction.innerHTML = '';
-
-  if (!state.pendingCleanup || !state.pendingCleanup.token || state.pendingCleanup.tabCount === 0) {
-    cleanupAction.appendChild(createEmptyState('没有待关闭的已保存标签', '保存工作集后，可以在这里关闭本次已保存的标签。'));
-    return;
-  }
-
-  const closeSavedButton = document.createElement('button');
-  closeSavedButton.className = 'close-saved-button danger-button';
-  closeSavedButton.type = 'button';
-  closeSavedButton.textContent = `检查并关闭 ${state.pendingCleanup.tabCount} 个已保存标签`;
-  closeSavedButton.addEventListener('click', closeLastSavedTabs);
-  cleanupAction.appendChild(closeSavedButton);
-}
-
-async function handleWorkspaceAction(action, sessionId) {
-  if (action === 'restore') {
-    await runAction('restore-workspace', {
-      workspaceId: sessionId,
-      targetWindowId: state.currentWindowId
-    }, {
-      loadStateOptions: { keepMoreToolsFocus: true }
-    });
-    return;
-  }
-
-  if (action === 'restore-new-window') {
-    await runAction('restore-workspace-new-window', { workspaceId: sessionId }, {
-      loadStateOptions: { keepMoreToolsFocus: true }
-    });
-    return;
-  }
-
-  if (action === 'rename') {
-    const session = state.sessions.find((item) => item.id === sessionId);
-    const name = window.prompt('请输入新的工作集名称', session ? session.name : '');
-
-    if (name === null) {
-      setStatus('已取消重命名');
-      return;
-    }
-
-    await runAction('rename-workspace', { workspaceId: sessionId, name }, {
-      loadStateOptions: { keepMoreToolsFocus: true }
-    });
-    return;
-  }
-
-  if (action === 'favorite') {
-    await runAction('toggle-workspace-favorite', { workspaceId: sessionId }, {
-      loadStateOptions: { keepMoreToolsFocus: true }
-    });
-    return;
-  }
-
-  if (action === 'delete') {
-    const shouldDelete = window.confirm('删除后无法恢复，确定删除这个工作集吗？');
-
-    if (!shouldDelete) {
-      setStatus('已取消删除工作集');
-      return;
-    }
-
-    await runAction('delete-workspace', { workspaceId: sessionId }, {
-      loadStateOptions: { keepMoreToolsFocus: true }
-    });
-  }
-}
-
-function formatTimestamp(timestamp) {
-  if (!timestamp) {
-    return '时间未知';
-  }
-
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(new Date(timestamp));
-}
-
 function formatRecentAccessTime(timestamp, now = Date.now()) {
   if (!Number.isFinite(timestamp) || timestamp <= 0) {
     return '';
@@ -2508,37 +2276,6 @@ function formatActionResult(action, result) {
       ...(result.unchangedCount > 0 ? [`${result.unchangedCount} 个标签无需移动`] : []),
       ...failures
     ].join('，');
-  }
-
-  if (action === 'save-workspace') {
-    return `已保存 ${result.savedCount} 个标签`;
-  }
-
-  if (action === 'restore-workspace' || action === 'restore-workspace-new-window') {
-    const warnings = [];
-
-    if (result.groupingFailed) {
-      warnings.push('分组未完全恢复');
-    }
-
-    if (result.activationFailed) {
-      warnings.push('未能自动切换到目标页面');
-    }
-
-    const warningText = warnings.length > 0 ? `，${warnings.join('，')}` : '';
-    return `已恢复 ${result.restoredCount} 个标签，跳过 ${result.failedCount} 个无法恢复的页面${warningText}`;
-  }
-
-  if (action === 'rename-workspace') {
-    return '已重命名工作集';
-  }
-
-  if (action === 'delete-workspace') {
-    return '已删除工作集';
-  }
-
-  if (action === 'toggle-workspace-favorite') {
-    return result.favorite ? '已收藏工作集' : '已取消收藏工作集';
   }
 
   if (action === 'toggle-priority-group') {

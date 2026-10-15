@@ -1,7 +1,5 @@
 (() => {
   const DEFAULT_SETTINGS = {
-    // 限制保存数量是为了避免本地存储无限增长，同时保留最近的工作现场。
-    maxSessionCount: 10,
     // 默认至少两个同主域名标签才建组，原因是单标签分组通常只会增加标签栏噪音。
     minTabsPerGroup: 2,
     // 自定义规则默认为空，旧用户升级后仍沿用主域名分组。
@@ -117,7 +115,7 @@
    * @returns {string} 当前网址或待加载网址。
    */
   function getTabUrl(tab) {
-    // Chrome 更新或懒加载恢复期间，标签可能暂时只有 pendingUrl；保存时必须保留它，否则工作集会把页面当成空地址跳过。
+    // Chrome 更新或懒加载恢复期间，标签可能暂时只有 pendingUrl；搜索和分组仍需使用待加载的网址。
     return String((tab && (tab.url || tab.pendingUrl)) || '');
   }
 

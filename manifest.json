@@ -3,7 +3,7 @@
   "minimum_chrome_version": "121",
   "name": "标签之神",
   "description": "搜索切换、一键整理、分组和去重，管理上百个 Chrome 标签页。",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "icons": {
     "16": "assets/icons/icon-16.png",
     "32": "assets/icons/icon-32.png",

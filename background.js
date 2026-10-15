@@ -7,7 +7,6 @@ const {
   MAX_GROUP_RULE_CONDITION_COUNT,
   buildGroupRuleIdentity,
   buildResolvedGroupTitleMapFromGroupInfos,
-  buildTabSnapshotsFromNormalizedSettings,
   countConditionTreeConditions,
   doesRuleMatchTab,
   getDomainKey,
@@ -20,9 +19,7 @@ const {
 } = globalThis.TabGodGrouping;
 
 const STORAGE_KEYS = {
-  sessions: 'tabgod.sessions',
-  settings: 'tabgod.settings',
-  pendingCleanup: 'tabgod.pendingCleanup'
+  settings: 'tabgod.settings'
 };
 
 const GROUP_COLORS = ['blue', 'green', 'yellow', 'red', 'purple', 'cyan', 'orange', 'pink', 'grey'];
@@ -37,8 +34,6 @@ const COMMAND_BADGE_SUCCESS_COLOR = '#15803d';
 const COMMAND_BADGE_ERROR_COLOR = '#b91c1c';
 
 let commandBadgeClearTimer = null;
-let workspaceStorageQueue = Promise.resolve();
-const activeCleanupTokens = new Set();
 
 const TRACKING_QUERY_PARAMS = new Set([
   'utm_source',
@@ -69,61 +64,6 @@ function normalizeUrlForDuplicate(url) {
 function getGroupColor(index) {
   // Chrome 原生分组颜色数量有限，循环使用可以保证任意数量主域名都有稳定颜色。
   return GROUP_COLORS[index % GROUP_COLORS.length];
-}
-
-function normalizeWorkspace(workspace) {
-  const createdAt = Number(workspace && workspace.createdAt) || Date.now();
-  const rawTabs = Array.isArray(workspace && workspace.tabs) ? workspace.tabs : [];
-  const storedGroupCount = workspace && workspace.groupCount;
-  const groupCount = Number.isInteger(storedGroupCount) && storedGroupCount >= 0
-    ? storedGroupCount
-    : Array.isArray(workspace && workspace.groups)
-      ? workspace.groups.length
-      : new Set(rawTabs.map((tab) => String(tab && tab.groupKey || '')).filter(Boolean)).size;
-
-  return {
-    id: workspace && workspace.id ? workspace.id : `session-${createdAt}`,
-    name: workspace && workspace.name ? workspace.name : `${formatDateTime(createdAt)} 的工作集`,
-    createdAt,
-    favorite: Boolean(workspace && workspace.favorite),
-    favoritedAt: Number(workspace && workspace.favoritedAt) || 0,
-    activeUrl: workspace && workspace.activeUrl ? workspace.activeUrl : '',
-    sourceWindowId: Number.isInteger(workspace && workspace.sourceWindowId) ? workspace.sourceWindowId : null,
-    tabs: rawTabs.map((tab) => ({
-      id: Number.isInteger(tab && tab.id) ? tab.id : null,
-      title: String(tab && tab.title ? tab.title : ''),
-      url: getTabUrl(tab),
-      pinned: Boolean(tab && tab.pinned)
-    })),
-    groupCount
-  };
-}
-
-/**
- * 串行执行工作集存储修改，避免快捷键保存和弹窗管理同时发生时互相覆盖。
- * @param {Function} operation 实际读写工作集的异步操作。
- * @returns {Promise<*>} 当前修改结果。
- */
-function runWorkspaceStorageMutation(operation) {
-  const currentOperation = workspaceStorageQueue.then(operation, operation);
-
-  // 队列本身必须吞掉失败，原因是单次失败不能阻断后续工作集操作。
-  workspaceStorageQueue = currentOperation.catch(() => undefined);
-  return currentOperation;
-}
-
-function sortWorkspaces(workspaces) {
-  return [...workspaces].map(normalizeWorkspace).sort((left, right) => {
-    if (left.favorite !== right.favorite) {
-      return left.favorite ? -1 : 1;
-    }
-
-    if (left.favorite && right.favorite && left.favoritedAt !== right.favoritedAt) {
-      return right.favoritedAt - left.favoritedAt;
-    }
-
-    return right.createdAt - left.createdAt;
-  });
 }
 
 /**
@@ -359,25 +299,6 @@ function getWindowIdFromTabs(tabs) {
   return activeTab ? activeTab.windowId : fallbackTab ? fallbackTab.windowId : null;
 }
 
-async function resolveCurrentWindowId() {
-  const tabs = await queryCurrentWindowTabs();
-  const windowId = getWindowIdFromTabs(tabs);
-
-  if (Number.isInteger(windowId)) {
-    return windowId;
-  }
-
-  if (chrome.windows && typeof chrome.windows.getLastFocused === 'function') {
-    const focusedWindow = await chrome.windows.getLastFocused().catch(() => null);
-
-    if (focusedWindow && Number.isInteger(focusedWindow.id)) {
-      return focusedWindow.id;
-    }
-  }
-
-  throw new Error('无法确定目标窗口');
-}
-
 function buildRecentlyClosedTabSnapshot(tab, options) {
   const safeTab = tab || {};
   const sessionId = String(options && options.sessionId ? options.sessionId : '').trim();
@@ -591,30 +512,14 @@ async function getRecentlyClosedState() {
 }
 
 async function getManagementState() {
-  const [tabs, stored, pendingCleanup] = await Promise.all([
+  const [tabs, stored] = await Promise.all([
     queryCurrentWindowTabs(),
-    chrome.storage.local.get([
-      STORAGE_KEYS.sessions,
-      STORAGE_KEYS.settings
-    ]),
-    readPendingCleanup().catch(() => null)
+    chrome.storage.local.get([STORAGE_KEYS.settings])
   ]);
   const settings = normalizeSettings(stored[STORAGE_KEYS.settings]);
 
   return {
     groups: buildGroupSummariesFromNormalizedSettings(tabs, settings),
-    sessions: sortWorkspaces(stored[STORAGE_KEYS.sessions] || []).map((workspace) => ({
-      id: workspace.id,
-      name: workspace.name,
-      createdAt: workspace.createdAt,
-      favorite: workspace.favorite,
-      tabCount: workspace.tabs.length,
-      groupCount: workspace.groupCount
-    })),
-    pendingCleanup: pendingCleanup ? {
-      token: pendingCleanup.token,
-      tabCount: pendingCleanup.tabs.length
-    } : null,
     settings
   };
 }
@@ -979,169 +884,6 @@ async function closeSelectedDuplicateTabs(windowId, selectedGroups) {
   };
 }
 
-function createCleanupToken(createdAt) {
-  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
-    return `cleanup-${globalThis.crypto.randomUUID()}`;
-  }
-
-  // 极旧运行环境没有 randomUUID 时加入时间与随机片段，令牌只用于当前浏览器会话内防止误重放。
-  return `cleanup-${createdAt}-${Math.random().toString(36).slice(2)}`;
-}
-
-function normalizePendingCleanup(value) {
-  const token = String(value && value.token ? value.token : '').trim();
-  const workspaceId = String(value && value.workspaceId ? value.workspaceId : '').trim();
-  const sourceWindowId = Number.isInteger(value && value.sourceWindowId) ? value.sourceWindowId : null;
-  const tabs = (Array.isArray(value && value.tabs) ? value.tabs : []).filter((tab) => {
-    return Number.isInteger(tab && tab.id) && typeof tab.url === 'string' && tab.url;
-  }).map((tab) => ({
-    id: tab.id,
-    url: tab.url
-  }));
-
-  if (!token || !workspaceId || !Number.isInteger(sourceWindowId) || tabs.length === 0) {
-    return null;
-  }
-
-  return {
-    token,
-    workspaceId,
-    sourceWindowId,
-    createdAt: Number(value.createdAt) || Date.now(),
-    tabs
-  };
-}
-
-async function readPendingCleanup() {
-  if (!chrome.storage.session || typeof chrome.storage.session.get !== 'function') {
-    return null;
-  }
-
-  const stored = await chrome.storage.session.get([STORAGE_KEYS.pendingCleanup]);
-  return normalizePendingCleanup(stored[STORAGE_KEYS.pendingCleanup]);
-}
-
-async function storePendingCleanup(workspace) {
-  if (!chrome.storage.session || typeof chrome.storage.session.set !== 'function') {
-    return null;
-  }
-
-  const pendingCleanup = normalizePendingCleanup({
-    token: createCleanupToken(workspace.createdAt),
-    workspaceId: workspace.id,
-    sourceWindowId: workspace.sourceWindowId,
-    createdAt: workspace.createdAt,
-    tabs: workspace.tabs.map((tab) => ({
-      id: tab.id,
-      url: getTabUrl(tab)
-    }))
-  });
-
-  if (!pendingCleanup) {
-    if (typeof chrome.storage.session.remove === 'function') {
-      await chrome.storage.session.remove([STORAGE_KEYS.pendingCleanup]);
-    }
-    return null;
-  }
-
-  try {
-    await chrome.storage.session.set({
-      [STORAGE_KEYS.pendingCleanup]: pendingCleanup
-    });
-  } catch (error) {
-    // 新令牌写入失败时必须尽力清掉旧令牌，避免界面误把上一次保存当成本次待清理记录。
-    if (typeof chrome.storage.session.remove === 'function') {
-      await Promise.resolve(chrome.storage.session.remove([STORAGE_KEYS.pendingCleanup])).catch(() => undefined);
-    }
-    throw error;
-  }
-  return pendingCleanup;
-}
-
-async function clearPendingCleanupForWorkspace(workspaceId) {
-  const pendingCleanup = await readPendingCleanup().catch(() => null);
-
-  if (
-    pendingCleanup
-    && pendingCleanup.workspaceId === workspaceId
-    && chrome.storage.session
-    && typeof chrome.storage.session.remove === 'function'
-  ) {
-    await chrome.storage.session.remove([STORAGE_KEYS.pendingCleanup]);
-  }
-}
-
-async function consumePendingCleanup(cleanupToken) {
-  const safeToken = String(cleanupToken || '').trim();
-
-  if (!safeToken || activeCleanupTokens.has(safeToken)) {
-    throw new Error('待关闭记录已失效，请重新保存工作集');
-  }
-
-  activeCleanupTokens.add(safeToken);
-
-  try {
-    const pendingCleanup = await readPendingCleanup();
-
-    if (!pendingCleanup || pendingCleanup.token !== safeToken) {
-      throw new Error('待关闭记录已失效，请重新保存工作集');
-    }
-
-    if (!chrome.storage.session || typeof chrome.storage.session.remove !== 'function') {
-      throw new Error('无法安全消费待关闭记录');
-    }
-
-    // 关闭前先消费一次性令牌，原因是重复点击不能再次作用于已经变化的标签页。
-    await chrome.storage.session.remove([STORAGE_KEYS.pendingCleanup]);
-    return pendingCleanup;
-  } finally {
-    activeCleanupTokens.delete(safeToken);
-  }
-}
-
-async function saveWorkspace(name, options = {}) {
-  const tabs = Number.isInteger(options.sourceWindowId)
-    ? await queryWindowTabs(options.sourceWindowId)
-    : await queryCurrentWindowTabs();
-  const stored = await chrome.storage.local.get([STORAGE_KEYS.settings]);
-  const settings = normalizeSettings(stored[STORAGE_KEYS.settings]);
-  const createdAt = Date.now();
-  const snapshots = buildTabSnapshotsFromNormalizedSettings(tabs, settings);
-  const activeTab = snapshots.find((tab) => tab.active);
-  const groupCount = new Set(snapshots.map((tab) => tab.groupKey)).size;
-  const sourceWindowId = getWindowIdFromTabs(tabs);
-  const workspaceName = String(name || '').trim() || `${formatDateTime(createdAt)} 的工作集`;
-  const workspace = normalizeWorkspace({
-    id: `session-${createdAt}`,
-    name: workspaceName,
-    createdAt,
-    activeUrl: activeTab ? activeTab.url : '',
-    sourceWindowId,
-    tabs: snapshots,
-    groupCount
-  });
-  await runWorkspaceStorageMutation(async () => {
-    const workspaceStored = await chrome.storage.local.get([STORAGE_KEYS.sessions]);
-    const existingSessions = sortWorkspaces(workspaceStored[STORAGE_KEYS.sessions] || []);
-    const sessions = [workspace, ...existingSessions].slice(0, settings.maxSessionCount);
-
-    await chrome.storage.local.set({
-      [STORAGE_KEYS.sessions]: sessions
-    });
-  });
-  const pendingCleanup = await storePendingCleanup(workspace).catch(() => null);
-
-  return {
-    savedCount: snapshots.length,
-    cleanupToken: pendingCleanup ? pendingCleanup.token : '',
-    cleanupTabCount: pendingCleanup ? pendingCleanup.tabs.length : 0
-  };
-}
-
-async function saveCurrentSession() {
-  return saveWorkspace();
-}
-
 async function activateTabAcrossWindows(tabId) {
   if (!Number.isInteger(tabId)) {
     throw new Error('目标标签无效');
@@ -1190,80 +932,6 @@ async function restoreClosedSession(sessionId) {
     // 最近关闭会话可能已经被 Chrome 清理或被新的关闭记录挤出，统一提示能避免暴露浏览器内部错误文案。
     throw new Error('历史标签可能已过期');
   }
-}
-
-async function closeSavedTabs(cleanupToken) {
-  const pendingCleanup = await consumePendingCleanup(cleanupToken);
-  const stored = await chrome.storage.local.get([STORAGE_KEYS.sessions]);
-  const workspace = sortWorkspaces(stored[STORAGE_KEYS.sessions] || []).find((item) => {
-    return item.id === pendingCleanup.workspaceId;
-  });
-
-  if (!workspace) {
-    throw new Error('对应工作集已不存在，未关闭任何标签');
-  }
-
-  const workspaceTabMap = new Map(workspace.tabs.map((tab) => [
-    tab.id,
-    getTabUrl(tab)
-  ]));
-  let windowTabs = [];
-
-  try {
-    windowTabs = await queryWindowTabs(pendingCleanup.sourceWindowId);
-  } catch (error) {
-    return {
-      closedCount: 0,
-      skippedCount: pendingCleanup.tabs.length,
-      failedCount: 0
-    };
-  }
-
-  const sourceTabIds = new Set(windowTabs.map((tab) => tab.id));
-  let closedCount = 0;
-  let skippedCount = 0;
-  let failedCount = 0;
-
-  for (const target of pendingCleanup.tabs) {
-    const savedUrl = workspaceTabMap.get(target.id);
-
-    if (!savedUrl || savedUrl !== target.url || !sourceTabIds.has(target.id)) {
-      skippedCount += 1;
-      continue;
-    }
-
-    let currentTab;
-
-    try {
-      currentTab = await chrome.tabs.get(target.id);
-    } catch (error) {
-      skippedCount += 1;
-      continue;
-    }
-
-    if (
-      !currentTab
-      || currentTab.windowId !== pendingCleanup.sourceWindowId
-      || isBulkCloseProtectedTab(currentTab)
-      || getTabUrl(currentTab) !== target.url
-    ) {
-      skippedCount += 1;
-      continue;
-    }
-
-    try {
-      await chrome.tabs.remove(target.id);
-      closedCount += 1;
-    } catch (error) {
-      failedCount += 1;
-    }
-  }
-
-  return {
-    closedCount,
-    skippedCount,
-    failedCount
-  };
 }
 
 async function getLastFocusedWindowForCloseGuard() {
@@ -1581,250 +1249,6 @@ async function updateSettings(partialSettings) {
   }, reconcileResult);
 }
 
-async function updateStoredWorkspaces(updater) {
-  return runWorkspaceStorageMutation(async () => {
-    const stored = await chrome.storage.local.get([STORAGE_KEYS.sessions]);
-    const workspaces = sortWorkspaces(stored[STORAGE_KEYS.sessions] || []);
-    const nextWorkspaces = updater(workspaces).map(normalizeWorkspace);
-    const sortedNextWorkspaces = sortWorkspaces(nextWorkspaces);
-
-    await chrome.storage.local.set({
-      [STORAGE_KEYS.sessions]: sortedNextWorkspaces
-    });
-
-    return sortedNextWorkspaces;
-  });
-}
-
-async function renameWorkspace(workspaceId, name) {
-  const trimmedName = String(name || '').trim();
-
-  if (!trimmedName) {
-    throw new Error('工作集名称不能为空');
-  }
-
-  let renamedWorkspace = null;
-
-  await updateStoredWorkspaces((workspaces) => {
-    return workspaces.map((workspace) => {
-      if (workspace.id !== workspaceId) {
-        return workspace;
-      }
-
-      renamedWorkspace = normalizeWorkspace(Object.assign({}, workspace, {
-        name: trimmedName
-      }));
-      return renamedWorkspace;
-    });
-  });
-
-  if (!renamedWorkspace) {
-    throw new Error('没有找到要重命名的工作集');
-  }
-
-  return {
-    workspace: renamedWorkspace
-  };
-}
-
-async function deleteWorkspace(workspaceId) {
-  let deletedCount = 0;
-
-  await updateStoredWorkspaces((workspaces) => {
-    return workspaces.filter((workspace) => {
-      if (workspace.id === workspaceId) {
-        deletedCount += 1;
-        return false;
-      }
-
-      return true;
-    });
-  });
-
-  if (deletedCount === 0) {
-    throw new Error('没有找到要删除的工作集');
-  }
-
-  await clearPendingCleanupForWorkspace(workspaceId).catch(() => undefined);
-
-  return {
-    deletedCount
-  };
-}
-
-async function toggleWorkspaceFavorite(workspaceId) {
-  let updatedWorkspace = null;
-
-  await updateStoredWorkspaces((workspaces) => {
-    return workspaces.map((workspace) => {
-      if (workspace.id !== workspaceId) {
-        return workspace;
-      }
-
-      const nextFavorite = !workspace.favorite;
-      updatedWorkspace = normalizeWorkspace(Object.assign({}, workspace, {
-        favorite: nextFavorite,
-        favoritedAt: nextFavorite ? Date.now() : 0
-      }));
-      return updatedWorkspace;
-    });
-  });
-
-  if (!updatedWorkspace) {
-    throw new Error('没有找到要收藏的工作集');
-  }
-
-  return {
-    workspace: updatedWorkspace,
-    favorite: updatedWorkspace.favorite
-  };
-}
-
-function formatDateTime(timestamp) {
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(new Date(timestamp));
-}
-
-async function restoreSession(sessionId, options = {}) {
-  const stored = await chrome.storage.local.get([STORAGE_KEYS.sessions, STORAGE_KEYS.settings]);
-  const sessions = sortWorkspaces(stored[STORAGE_KEYS.sessions] || []);
-  const settings = normalizeSettings(stored[STORAGE_KEYS.settings]);
-  const session = sessions.find((item) => item.id === sessionId);
-
-  if (!session) {
-    throw new Error('没有找到要恢复的工作集');
-  }
-
-  const createdTabs = [];
-  let failedCount = 0;
-  let targetWindowId = Number.isInteger(options.targetWindowId) ? options.targetWindowId : null;
-  let createdFirstRestorableTab = false;
-  let groupingFailed = false;
-  let activationFailed = false;
-
-  if (options.newWindow) {
-    const firstRestorableTab = session.tabs.find((tab) => {
-      const url = getTabUrl(tab);
-
-      return url && !url.startsWith('chrome://');
-    });
-
-    if (!firstRestorableTab) {
-      throw new Error('工作集中没有可恢复的页面');
-    }
-    const firstRestorableUrl = getTabUrl(firstRestorableTab);
-
-    const createdWindow = await chrome.windows.create({
-      url: firstRestorableUrl,
-      focused: true
-    });
-    targetWindowId = createdWindow.id;
-
-    if (!Number.isInteger(targetWindowId)) {
-      throw new Error('无法确定新建窗口');
-    }
-
-    createdFirstRestorableTab = true;
-
-    if (createdWindow.tabs && createdWindow.tabs[0]) {
-      const createdFirstTab = createdWindow.tabs[0];
-
-      if (firstRestorableTab.pinned && typeof createdFirstTab.id === 'number') {
-        // 新窗口首个标签无法在 windows.create 参数里声明固定，创建后补固定以保留工作集状态。
-        await chrome.tabs.update(createdFirstTab.id, { pinned: true }).catch(() => undefined);
-      }
-
-      createdTabs.push(Object.assign({}, createdFirstTab, {
-        title: firstRestorableTab.title || createdWindow.tabs[0].title,
-        url: firstRestorableUrl,
-        pinned: Boolean(firstRestorableTab.pinned)
-      }));
-    }
-  } else {
-    if (!Number.isInteger(targetWindowId)) {
-      targetWindowId = await resolveCurrentWindowId();
-    }
-
-    // 恢复开始前先验证目标窗口，后续即使焦点变化也不得回退到新的当前窗口。
-    await queryWindowTabs(targetWindowId);
-  }
-
-  for (const tab of session.tabs) {
-    const url = getTabUrl(tab);
-
-    if (!url || url.startsWith('chrome://')) {
-      // Chrome 内部页面通常不允许扩展创建，跳过可以避免恢复流程整体失败。
-      failedCount += 1;
-      continue;
-    }
-
-    if (createdFirstRestorableTab) {
-      // 新窗口创建必须先带一个 URL，这个首个页面已经存在，避免重复恢复同一条记录。
-      createdFirstRestorableTab = false;
-      continue;
-    }
-
-    try {
-      const createdTab = await chrome.tabs.create({
-        url,
-        active: false,
-        pinned: Boolean(tab.pinned),
-        windowId: targetWindowId
-      });
-      createdTabs.push(Object.assign({}, createdTab, {
-        title: tab.title || createdTab.title,
-        url
-      }));
-    } catch (error) {
-      failedCount += 1;
-    }
-  }
-
-  // 恢复工作集可能发生在已有同名分组的窗口中，必须重新梳理整个目标窗口，且不能受恢复期间焦点变化影响。
-  try {
-    const restoredTitleMap = new Map(createdTabs
-      .filter((tab) => Number.isInteger(tab && tab.id) && tab.title)
-      .map((tab) => [tab.id, tab.title]));
-    const targetTabs = await queryWindowTabs(targetWindowId);
-    const tabsForGrouping = targetTabs.map((tab) => {
-      const restoredTitle = restoredTitleMap.get(tab.id);
-
-      // 新建标签可能尚未加载出标题；使用工作集快照可让标题规则首次恢复时稳定命中。
-      return restoredTitle && !tab.title
-        ? Object.assign({}, tab, { title: restoredTitle })
-        : tab;
-    });
-    await reconcileWindowGroupsFromTabs(tabsForGrouping, settings);
-  } catch (error) {
-    // 标签已经成功创建时不能把分组失败冒充成整体失败，否则用户重试会重复恢复全部页面。
-    groupingFailed = true;
-  }
-
-  const tabToActivate = createdTabs.find((tab) => tab.url === session.activeUrl) || createdTabs[0];
-
-  if (tabToActivate && typeof tabToActivate.id === 'number') {
-    try {
-      await chrome.tabs.update(tabToActivate.id, { active: true });
-    } catch (error) {
-      // 激活失败不影响已经恢复的标签，单独返回状态供前台说明。
-      activationFailed = true;
-    }
-  }
-
-  return {
-    restoredCount: createdTabs.length,
-    failedCount,
-    groupingFailed,
-    activationFailed,
-    targetWindowId
-  };
-}
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handleMessage(message)
     .then((payload) => sendResponse({ ok: true, payload }))
@@ -1863,14 +1287,13 @@ async function showCommandBadge(text, color) {
       }, COMMAND_BADGE_CLEAR_DELAY_MS);
     }
   } catch (error) {
-    // 徽标只是反馈通道，更新失败不能反过来影响整理或保存结果。
+    // 徽标只是反馈通道，更新失败不能反过来影响整理结果。
   }
 }
 
 async function handleCommand(command) {
   const operationMap = {
-    'organize-tabs': organizeTabs,
-    'save-session': saveCurrentSession
+    'organize-tabs': organizeTabs
   };
   const operation = operationMap[command];
 
@@ -1930,36 +1353,6 @@ async function handleMessage(message) {
 
   if (action === 'close-search-result-tab') {
     return closeSearchResultTab(message.tabId);
-  }
-
-  if (action === 'save-workspace') {
-    return saveWorkspace(message.name, { sourceWindowId: message.sourceWindowId });
-  }
-
-  if (action === 'close-saved-tabs') {
-    return closeSavedTabs(message.cleanupToken);
-  }
-
-  if (action === 'restore-workspace') {
-    return restoreSession(message.workspaceId || message.sessionId, {
-      targetWindowId: message.targetWindowId
-    });
-  }
-
-  if (action === 'restore-workspace-new-window') {
-    return restoreSession(message.workspaceId || message.sessionId, { newWindow: true });
-  }
-
-  if (action === 'rename-workspace') {
-    return renameWorkspace(message.workspaceId, message.name);
-  }
-
-  if (action === 'delete-workspace') {
-    return deleteWorkspace(message.workspaceId);
-  }
-
-  if (action === 'toggle-workspace-favorite') {
-    return toggleWorkspaceFavorite(message.workspaceId);
   }
 
   if (action === 'toggle-priority-group') {

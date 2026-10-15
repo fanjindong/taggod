@@ -71,7 +71,7 @@
     <rect x="16" y="472" width="188" height="36" rx="8" fill="#ffffff" stroke="#d8dee9"/>
     <text x="82" y="495" class="button" fill="#172033">智能去重</text>
     <rect x="216" y="472" width="188" height="36" rx="8" fill="#ffffff" stroke="#d8dee9"/>
-    <text x="282" y="495" class="button" fill="#172033">保存工作集</text>
+    <text x="282" y="495" class="button" fill="#172033">高级管理</text>
 
     <text x="16" y="536" class="tiny">默认快捷键</text>
     <rect x="86" y="521" width="52" height="20" rx="5" fill="#ffffff" stroke="#c2cad8"/>
@@ -79,8 +79,6 @@
     <text x="146" y="536" class="tiny">/</text>
     <rect x="158" y="521" width="86" height="20" rx="5" fill="#ffffff" stroke="#c2cad8"/>
     <text x="168" y="535" class="kbd">Ctrl Shift Y</text>
-    <rect x="310" y="516" width="94" height="30" rx="8" fill="#ffffff" stroke="#d8dee9"/>
-    <text x="334" y="536" class="button" fill="#172033">高级管理</text>
 
     <line x1="16" y1="562" x2="404" y2="562" stroke="#d8dee9"/>
     <text x="16" y="590" class="section-title">分组规则</text>

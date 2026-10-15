@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "minimum_chrome_version": "121",
   "name": "标签之神",
-  "description": "搜索切换、一键整理、分组、去重和保存上百个 Chrome 标签页。",
+  "description": "搜索切换、一键整理、分组和去重，管理上百个 Chrome 标签页。",
   "version": "0.2.5",
   "icons": {
     "16": "assets/icons/icon-16.png",
@@ -43,13 +43,6 @@
         "mac": "Command+Shift+Y"
       },
       "description": "整理当前窗口标签页"
-    },
-    "save-session": {
-      "suggested_key": {
-        "default": "Ctrl+Shift+S",
-        "mac": "Command+Shift+S"
-      },
-      "description": "保存当前窗口为工作集"
     }
   }
 }

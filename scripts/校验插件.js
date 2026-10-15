@@ -1361,6 +1361,7 @@ const popupChromeCalls = {
   sessionChangedListeners: []
 };
 const popupElements = new Map();
+const popupDocumentListeners = new Map();
 const popupStoredState = {};
 
 function createPopupTestElement() {
@@ -1407,7 +1408,9 @@ const popupSandbox = {
     documentElement: {
       dataset: {}
     },
-    addEventListener() {},
+    addEventListener(type, listener) {
+      popupDocumentListeners.set(type, listener);
+    },
     getElementById(id) {
       if (!popupElements.has(id)) {
         popupElements.set(id, createPopupTestElement());
@@ -1526,6 +1529,56 @@ const popupSandbox = {
 vm.createContext(popupSandbox);
 vm.runInContext(groupingContent, popupSandbox, { filename: 'grouping.js' });
 vm.runInContext(fs.readFileSync(popupPath, 'utf8'), popupSandbox, { filename: 'popup.js' });
+
+async function assertPopupPaintBeforeBrowserDataContract() {
+  const domContentLoaded = popupDocumentListeners.get('DOMContentLoaded');
+  const scheduledFrames = [];
+  const scheduledTimers = [];
+  const originalRequestAnimationFrame = popupSandbox.window.requestAnimationFrame;
+  const originalSetTimeout = popupSandbox.window.setTimeout;
+
+  assert.strictEqual(typeof domContentLoaded, 'function');
+  popupChromeCalls.tabQueries.length = 0;
+  popupChromeCalls.storageGets.length = 0;
+  popupChromeCalls.commandReads = 0;
+  popupChromeCalls.sessionChangedListeners.length = 0;
+  popupSandbox.window.requestAnimationFrame = (callback) => {
+    scheduledFrames.push(callback);
+    return scheduledFrames.length;
+  };
+  popupSandbox.window.setTimeout = (callback) => {
+    scheduledTimers.push(callback);
+    return scheduledTimers.length;
+  };
+
+  try {
+    domContentLoaded();
+    assert.strictEqual(popupChromeCalls.tabQueries.length, 0, '首绘前不应读取标签页');
+    assert.strictEqual(popupChromeCalls.storageGets.length, 0, '首绘前不应读取本地数据');
+    assert.strictEqual(popupChromeCalls.commandReads, 0, '首绘前不应读取快捷键');
+    assert.strictEqual(scheduledFrames.length, 1);
+
+    scheduledFrames.shift()();
+    assert.strictEqual(popupChromeCalls.tabQueries.length, 0, '第一帧回调后应先让浏览器绘制');
+    assert.strictEqual(popupChromeCalls.storageGets.length, 0, '第一帧回调后应先让浏览器绘制');
+    assert.strictEqual(popupChromeCalls.commandReads, 0, '第一帧回调后应先让浏览器绘制');
+    assert.strictEqual(scheduledFrames.length, 1);
+
+    scheduledFrames.shift()();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepStrictEqual({ ...popupChromeCalls.tabQueries[0] }, { currentWindow: true });
+    assert.strictEqual(popupChromeCalls.storageGets.length, 1);
+    assert.strictEqual(popupChromeCalls.commandReads, 1);
+  } finally {
+    popupSandbox.window.requestAnimationFrame = originalRequestAnimationFrame;
+    popupSandbox.window.setTimeout = originalSetTimeout;
+    popupChromeCalls.tabQueries.length = 0;
+    popupChromeCalls.storageGets.length = 0;
+    popupChromeCalls.commandReads = 0;
+    popupChromeCalls.sessionChangedListeners.length = 0;
+    vm.runInContext('state.duplicateOverviewScheduled = false;', popupSandbox);
+  }
+}
 
 async function assertPopupProgressiveInitialLoadContract() {
   popupChromeCalls.tabQueries.length = 0;
@@ -2671,6 +2724,7 @@ async function assertManagementStateContract() {
 
 async function runAsyncChecks() {
   await assertManagementStateContract();
+  await assertPopupPaintBeforeBrowserDataContract();
   await assertPopupProgressiveInitialLoadContract();
   await assertPopupUnifiedSearchStateContract();
   await assertPopupSearchInteractionContract();

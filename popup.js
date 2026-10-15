@@ -263,8 +263,14 @@ function bindRecentlyClosedSessionEvents() {
 document.addEventListener('DOMContentLoaded', () => {
   bindEvents();
   bindRecentlyClosedSessionEvents();
-  loadCommandShortcuts();
-  loadState({ progressive: true });
+  focusSearchInput();
+  window.requestAnimationFrame(() => {
+    // 两帧之间先留一次真实绘制机会，避免冷态 Chrome API 抢在静态界面之前。
+    window.requestAnimationFrame(() => {
+      loadCommandShortcuts();
+      loadState({ progressive: true });
+    });
+  });
 });
 
 async function loadState(options = {}) {
